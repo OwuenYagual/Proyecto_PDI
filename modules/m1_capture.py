@@ -4,6 +4,7 @@ from config.settings import (
     CAMERA_INDEX,
     FRAME_WIDTH,
     FRAME_HEIGHT,
+    CAMERA_FPS,
     APPLY_GAUSSIAN,
     GAUSSIAN_KERNEL,
 )
@@ -12,7 +13,7 @@ from config.settings import (
 class CaptureModule:
     """
     Módulo M1: adquiere frames de la cámara y los preprocesa
-    para su uso en el módulo M2 (MediaPipe Pose).
+    para su uso en el módulo M2 (MediaPipe).
 
     Pipeline interno:
         VideoCapture → resize → BGR→RGB → [gaussiano opcional]
@@ -39,10 +40,18 @@ class CaptureModule:
         # Solicitar resolución nativa al driver (puede ser ignorada por el SO)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    # ------------------------------------------------------------------ #
-    # Interfaz pública                                                     #
-    # ------------------------------------------------------------------ #
+        actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        print(
+            f"Cámara activa: {actual_width}x{actual_height} "
+            f"a {actual_fps:.1f} FPS reportados por el driver."
+        )
+
+    # Interfaz pública
 
     def read(self) -> tuple[bool, np.ndarray | None, np.ndarray | None]:
         """
@@ -61,10 +70,9 @@ class CaptureModule:
         bgr = self._resize(bgr)
         bgr = cv2.flip(bgr, 1)  # espejo horizontal para simular cámara frontal
 
-        if self.apply_blur:
-            bgr = self._gaussian_blur(bgr)
+        inference_bgr = self._gaussian_blur(bgr) if self.apply_blur else bgr
 
-        rgb = self._bgr_to_rgb(bgr)
+        rgb = self._bgr_to_rgb(inference_bgr)
         return True, bgr, rgb
 
     def release(self) -> None:
@@ -76,14 +84,12 @@ class CaptureModule:
         """Retorna True si la cámara está activa."""
         return self.cap.isOpened()
 
-    # ------------------------------------------------------------------ #
     # Pasos del pipeline (privados)                                        #
-    # ------------------------------------------------------------------ #
 
     def _resize(self, frame: np.ndarray) -> np.ndarray:
         """
-        Redimensiona el frame a (FRAME_WIDTH × FRAME_HEIGHT) usando
-        interpolación bicúbica para preservar la calidad de bordes.
+        Redimensiona solo cuando la cámara no entrega la resolución objetivo.
+        Usa INTER_AREA para reducir e INTER_LINEAR para ampliar.
 
         Args:
             frame: imagen BGR de entrada (cualquier resolución).
@@ -91,10 +97,19 @@ class CaptureModule:
         Returns:
             Imagen BGR redimensionada a (width, height).
         """
+        source_height, source_width = frame.shape[:2]
+        if source_width == self.width and source_height == self.height:
+            return frame
+
+        interpolation = (
+            cv2.INTER_AREA
+            if source_width > self.width or source_height > self.height
+            else cv2.INTER_LINEAR
+        )
         return cv2.resize(
             frame,
             (self.width, self.height),
-            interpolation=cv2.INTER_CUBIC,
+            interpolation=interpolation,
         )
 
     def _gaussian_blur(self, frame: np.ndarray) -> np.ndarray:

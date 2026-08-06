@@ -8,14 +8,17 @@ from config.settings import (
     VISIBILITY_THRESHOLD,
     FRAME_WIDTH,
     FRAME_HEIGHT,
+    POSE_MODEL_COMPLEXITY,
+    HAND_MODEL_COMPLEXITY,
+    HANDS_PROCESS_INTERVAL,
 )
 
-# ── Índices MediaPipe Pose ────────────────────────────────────────────────
+# Índices MediaPipe Pose
 SHOULDER   = 11
 ELBOW      = 13
 WRIST_POSE = 15   # muñeca según Pose (ancla de sincronización)
 
-# ── Índices MediaPipe Hands ───────────────────────────────────────────────
+# Índices MediaPipe Hands
 WRIST_HAND = 0    # muñeca según Hands (ancla de sincronización)
 THUMB_TIP  = 4    # punta del pulgar
 INDEX_TIP  = 8    # punta del índice
@@ -23,7 +26,7 @@ INDEX_TIP  = 8    # punta del índice
 
 class PoseDetector:
     """
-    Módulo M2 fusionado: corre MediaPipe Pose y MediaPipe Hands
+    Módulo M2: corre MediaPipe Pose y MediaPipe Hands
     sobre el mismo frame y sincroniza sus landmarks usando la muñeca
     como punto de referencia común.
 
@@ -42,7 +45,7 @@ class PoseDetector:
 
         self.pose = self.mp_pose.Pose(
             static_image_mode=False,
-            model_complexity=1,
+            model_complexity=POSE_MODEL_COMPLEXITY,
             smooth_landmarks=True,
             enable_segmentation=False,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
@@ -52,22 +55,28 @@ class PoseDetector:
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,              # solo una mano necesaria
-            model_complexity=1,
+            model_complexity=HAND_MODEL_COMPLEXITY,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
         )
+        self._cached_hand = None
+        self._hands_initialized = False
+        self._hands_frames_since_process = HANDS_PROCESS_INTERVAL
 
-    # ------------------------------------------------------------------ #
-    # Interfaz pública                                                     #
-    # ------------------------------------------------------------------ #
+    # Interfaz pública
 
-    def process(self, rgb_frame: np.ndarray) -> dict | None:
+    def process(
+        self,
+        rgb_frame: np.ndarray,
+        process_hands: bool = True,
+    ) -> dict | None:
         """
         Ejecuta Pose y Hands sobre el frame RGB y retorna los landmarks
         fusionados y sincronizados.
 
         Args:
             rgb_frame: imagen RGB uint8 (H, W, 3).
+            process_hands: activa Hands; si es False solo procesa Pose.
 
         Returns:
             {
@@ -84,17 +93,24 @@ class PoseDetector:
             }
             None si no se detectó el brazo.
         """
-        pose_results  = self.pose.process(rgb_frame)
-        hands_results = self.hands.process(rgb_frame)
+        rgb_frame.flags.writeable = False
+        try:
+            pose_results = self.pose.process(rgb_frame)
 
-        # Sin detección de brazo → no hay nada útil que retornar
-        if not pose_results.pose_landmarks:
-            return None
+            # Sin pose no se necesita ejecutar el modelo adicional de manos.
+            if not pose_results.pose_landmarks:
+                self._reset_hand_cache()
+                return None
 
-        arm_landmarks  = self._extract_arm(pose_results.pose_landmarks)
-        hand_landmarks = self._extract_hand(hands_results)
+            arm_landmarks = self._extract_arm(pose_results.pose_landmarks)
+            hand_landmarks = self._process_hand_if_needed(
+                rgb_frame,
+                enabled=process_hands,
+            )
+        finally:
+            rgb_frame.flags.writeable = True
 
-        # Sincronizar mano con brazo si hay detección de mano
+        # Sincronizar el resultado reutilizado de Hands con la muñeca actual.
         if hand_landmarks is not None:
             hand_landmarks = self._sync_wrists(arm_landmarks, hand_landmarks)
 
@@ -199,9 +215,7 @@ class PoseDetector:
         self.pose.close()
         self.hands.close()
 
-    # ------------------------------------------------------------------ #
-    # Context manager                                                      #
-    # ------------------------------------------------------------------ #
+    # Context manager
 
     def __enter__(self):
         return self
@@ -210,9 +224,34 @@ class PoseDetector:
         self.release()
         return False
 
-    # ------------------------------------------------------------------ #
-    # Métodos privados                                                     #
-    # ------------------------------------------------------------------ #
+    # Métodos privados
+
+    def _process_hand_if_needed(
+        self,
+        rgb_frame: np.ndarray,
+        enabled: bool,
+    ) -> dict | None:
+        if not enabled:
+            self._reset_hand_cache()
+            return None
+
+        self._hands_frames_since_process += 1
+        should_process = (
+            not self._hands_initialized
+            or self._hands_frames_since_process >= HANDS_PROCESS_INTERVAL
+        )
+        if should_process:
+            hands_results = self.hands.process(rgb_frame)
+            self._cached_hand = self._extract_hand(hands_results)
+            self._hands_initialized = True
+            self._hands_frames_since_process = 0
+
+        return self._cached_hand
+
+    def _reset_hand_cache(self) -> None:
+        self._cached_hand = None
+        self._hands_initialized = False
+        self._hands_frames_since_process = HANDS_PROCESS_INTERVAL
 
     def _extract_arm(self, pose_landmarks) -> dict:
         """

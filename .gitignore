@@ -56,3 +56,8 @@
 *.bak
 *.sav
 *.te~
+
+# Entorno y cache de Python
+.venv/
+__pycache__/
+*.py[cod]

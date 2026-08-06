@@ -76,12 +76,16 @@ class AngleCalculator:
 
         # ── Apertura gripper desde Hands ──────────────────────────────
         raw_gripper = self._gripper_aperture(hand)
+        if raw_gripper is None:
+            gripper = self._current_smoothed(self.JOINT_GRIPPER, default=0.0)
+        else:
+            gripper = self._smooth(self.JOINT_GRIPPER, raw_gripper)
 
         # ── Media móvil ───────────────────────────────────────────────
         return {
             self.JOINT_SHOULDER: round(self._smooth(self.JOINT_SHOULDER, raw_shoulder), 2),
             self.JOINT_ELBOW:    round(self._smooth(self.JOINT_ELBOW,    raw_elbow),    2),
-            self.JOINT_GRIPPER:  round(self._smooth(self.JOINT_GRIPPER,  raw_gripper),  3),
+            self.JOINT_GRIPPER:  round(gripper, 3),
             "valid":             self._arm_valid(arm),
             "hand_detected":     hand is not None,
         }
@@ -126,20 +130,20 @@ class AngleCalculator:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _gripper_aperture(hand: dict | None) -> float:
+    def _gripper_aperture(hand: dict | None) -> float | None:
         """
         Distancia euclidiana entre punta del índice (lm 8) y punta
         del pulgar (lm 4), sincronizadas al espacio de Pose por M2.
 
         Returns:
             Apertura normalizada [0.0, 1.0].
-            0.0 si no hay detección de mano.
+            None si no hay detección de mano.
         """
         if hand is None:
-            return 0.0
+            return None
 
         if THUMB_TIP not in hand or INDEX_TIP not in hand:
-            return 0.0
+            return None
 
         dx = hand[INDEX_TIP]["x"] - hand[THUMB_TIP]["x"]
         dy = hand[INDEX_TIP]["y"] - hand[THUMB_TIP]["y"]
@@ -155,6 +159,10 @@ class AngleCalculator:
     def _smooth(self, joint: str, value: float) -> float:
         self._buffers[joint].append(value)
         return float(np.mean(self._buffers[joint]))
+
+    def _current_smoothed(self, joint: str, default: float) -> float:
+        buffer = self._buffers[joint]
+        return float(np.mean(buffer)) if buffer else default
 
     # ------------------------------------------------------------------ #
     # Validación                                                           #
