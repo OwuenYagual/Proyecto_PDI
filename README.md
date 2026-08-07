@@ -98,19 +98,20 @@ Con el entorno virtual activo:
 python main.py
 ```
 
-Controles:
+Controles por teclado:
 
-| Botón | Atajo | Acción |
-| --- | --- | --- |
-| **Iniciar/Pausar** | `Espacio` | Inicia la imitación o pausa haciendo `hold` |
-| **Emergencia** | `E` | Enclava la parada y detiene la simulación |
-| **Rearmar** | `R` | Reconecta después de pulsar **Play** nuevamente |
-| **Salir** | `Q` | Restaura `home` solo si no hubo emergencia o fallo |
+| Tecla | Acción |
+| --- | --- |
+| `Espacio` | Inicia la imitación o pausa haciendo `hold` |
+| `E` | Enclava la parada y detiene la simulación |
+| `R` | Reconecta después de pulsar **Play** nuevamente |
+| `Q` | Restaura `home` solo si no hubo emergencia o fallo |
 
-La ventana aparece antes de que termine el preflight. La captura, MediaPipe y la
-conexión se ejecutan fuera del hilo de Tkinter, por lo que los controles siguen
-respondiendo durante la inicialización y el rearme. Tres fallos consecutivos de
-cámara enclavan la emergencia y exigen reiniciar la aplicación.
+La leyenda de atajos permanece visible en la franja inferior. La ventana aparece
+antes de que termine el preflight. La captura, MediaPipe y la conexión se
+ejecutan fuera del hilo de Tkinter, por lo que el teclado sigue respondiendo
+durante la inicialización y el rearme. Tres fallos consecutivos de cámara
+enclavan la emergencia y exigen reiniciar la aplicación.
 
 Después de una parada de emergencia, pulsar **Play** no reactiva por sí solo el
 control. Primero pulsa `R` para repetir el preflight y luego `Espacio`.

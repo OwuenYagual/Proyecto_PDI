@@ -408,11 +408,12 @@ de telemetría muestran:
     \item disponibilidad de la cámara y del Vision Sensor.
 \end{itemize}
 
-Los botones Iniciar/Pausar, Emergencia, Rearmar y Salir comparten el mismo
-despachador que los atajos Espacio, E, R y Q. Su habilitación se deriva del
-estado de seguridad. La interfaz lee snapshots locales del controlador y del
-runtime; por tanto, el renderizado no realiza RPC y permanece disponible
-mientras los workers esperan una respuesta de CoppeliaSim.
+La operación se realiza exclusivamente mediante los atajos Espacio, E, R y Q,
+cuya leyenda permanece visible en la franja inferior. El despachador acepta o
+rechaza cada acción de acuerdo con el estado de seguridad. La interfaz lee
+snapshots locales del controlador y del runtime; por tanto, el renderizado no
+realiza RPC y permanece disponible mientras los workers esperan una respuesta
+de CoppeliaSim.
 
 El worker M4 resuelve el Vision Sensor durante el preflight y solicita su imagen
 RGB a 10~Hz, después de atender ESTOP, watchdog, colisiones y comandos. Una
@@ -435,8 +436,8 @@ El ciclo integrado se ejecuta en el siguiente orden:
     colisiones y transmite los canales aceptados.
     \item El runtime M5 dibuja el skeleton, refleja la imagen final y publica
           un snapshot latest-only para la GUI.
-    \item Tkinter compone ambas vistas, las tarjetas y los controles sin RPC.
-    \item Los botones y el teclado publican acciones no bloqueantes.
+    \item Tkinter compone ambas vistas, las tarjetas y la leyenda de atajos sin RPC.
+    \item El teclado publica acciones no bloqueantes mediante un único despachador.
 \end{enumerate}
 
 \begin{figure}[H]
@@ -669,41 +670,6 @@ controlador alcanzó \texttt{READY}. También se amplió el presupuesto global d
 conexión y preflight de 3 s a 10 s, manteniendo el timeout de las RPC operativas
 en 500 ms.
 
-\subsection{Rendimiento en Tiempo Real}
-\label{subsec:rendimiento_tiempo_real}
-
-La arquitectura satisface de forma estructural dos requisitos de rendimiento:
-el envío está limitado a 20 Hz y la cola conserva únicamente el comando más
-reciente. Las pruebas de concurrencia demostraron que \texttt{submit}, la
-lectura del snapshot y la tecla de emergencia no esperan a una RPC bloqueada.
-
-No se realizó una campaña instrumentada con la cámara física. Por ello, los
-campos de la Tabla~\ref{tab:resultados_rendimiento} se marcan como N/D
-(\textit{no disponible}); N/D no equivale a cero.
-
-\begin{table}[H]
-    \centering
-    \renewcommand{\arraystretch}{1.2}
-    \small
-    \begin{tabularx}{\textwidth}{
-        >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{2.2cm}
-        >{\raggedright\arraybackslash}p{2.2cm}
-        >{\raggedright\arraybackslash}p{2.4cm}}
-        \toprule
-        \textbf{Escenario} & \textbf{FPS promedio} &
-        \textbf{FPS mínimo} & \textbf{Latencia} \\
-        \midrule
-        Iluminación alta & N/D & N/D & N/D \\
-        Iluminación media & N/D & N/D & N/D \\
-        Iluminación baja & N/D & N/D & N/D \\
-        Movimiento rápido & N/D & N/D & N/D \\
-        \bottomrule
-    \end{tabularx}
-    \caption{Métricas que requieren la campaña experimental con cámara.}
-    \label{tab:resultados_rendimiento}
-\end{table}
-
 \subsection{Precisión Angular y Control del Robot}
 \label{subsec:precision_angular}
 
@@ -783,7 +749,7 @@ la robustez lógica frente a entradas y estados anómalos sí cuenta con evidenc
         Pérdida de pose &
         Hold inmediato y ESTOP después de 750 ms sin brazo válido. & Aprobado \\
         RPC bloqueada &
-        El teclado y el HUD permanecen responsivos; el worker entra en
+        El teclado y el dashboard permanecen responsivos; el worker entra en
         \texttt{FAULT} si vence el timeout. & Aprobado \\
         Comandos rápidos &
         El comando pendiente anterior se sustituye por el más reciente. &
