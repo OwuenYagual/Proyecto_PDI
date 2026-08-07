@@ -1,0 +1,408 @@
+% !TeX root = ../alda_g17.tex
+
+% ============================================================
+\chapter{Desarrollo de la Solución y Análisis de Resultados}
+\label{chap:desarrollo_resultados}
+% ============================================================
+
+En este capítulo se describe la implementación de la solución propuesta para
+el sistema de imitación de movimientos, la integración de sus módulos y el
+procedimiento experimental utilizado para evaluarlo. Finalmente, se presentan
+y analizan los resultados obtenidos en términos de funcionamiento, rendimiento,
+precisión y robustez.
+
+% ============================================================
+\section{Descripción General de la Solución Implementada}
+\label{sec:descripcion_solucion}
+% ============================================================
+
+El sistema implementado captura en tiempo real los movimientos del brazo
+derecho y de la mano del usuario mediante una cámara RGB. Los fotogramas son
+procesados con MediaPipe para detectar los puntos de referencia corporales y de
+la mano. A partir de estos puntos se calculan los ángulos articulares y el nivel
+de apertura del gripper. Finalmente, los valores obtenidos se transforman en
+comandos para controlar un robot UR5 y un gripper RG2 en CoppeliaSim.
+
+% TODO: Insertar el diagrama de bloques final de la solución.
+% Ejemplo:
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.9\textwidth]{images/diagrama_final.png}
+%     \caption{Arquitectura final de la solución implementada.}
+%     \label{fig:arquitectura_final}
+% \end{figure}
+
+En comparación con el diseño conceptual presentado en el Informe \#2, la
+implementación final incorporó los siguientes cambios o ajustes:
+
+\begin{itemize}
+    \item TODO: Describir los cambios realizados sobre el diseño original.
+    \item TODO: Justificar las decisiones técnicas tomadas durante el desarrollo.
+    \item TODO: Indicar las funcionalidades planificadas que no fueron implementadas.
+\end{itemize}
+
+% ============================================================
+\section{Entorno de Implementación}
+\label{sec:entorno_implementacion}
+% ============================================================
+
+La Tabla~\ref{tab:entorno_implementacion} resume los recursos de hardware y
+software utilizados para implementar y evaluar el sistema.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabularx}{\textwidth}{p{3.5cm} X}
+        \toprule
+        \textbf{Recurso} & \textbf{Descripción} \\
+        \midrule
+        Computador & TODO: Procesador, memoria RAM y sistema operativo. \\
+        Cámara & TODO: Modelo, resolución y frecuencia de captura. \\
+        Python & TODO: Versión utilizada. \\
+        OpenCV & TODO: Versión utilizada. \\
+        MediaPipe & TODO: Versión y modelos empleados. \\
+        CoppeliaSim & TODO: Versión y características de la escena. \\
+        Robot virtual & UR5 con gripper RG2. \\
+        Comunicación & ZeroMQ Remote API, puerto TODO. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Entorno de implementación y evaluación del proyecto.}
+    \label{tab:entorno_implementacion}
+\end{table}
+
+% ============================================================
+\section{Implementación de los Módulos}
+\label{sec:implementacion_modulos}
+% ============================================================
+
+\subsection{Módulo 1: Captura y Preprocesamiento de Imagen}
+\label{subsec:implementacion_m1}
+
+Este módulo obtiene los fotogramas de la cámara y los prepara para las etapas
+posteriores del sistema.
+
+\begin{itemize}
+    \item Configuración de la cámara: TODO.
+    \item Resolución y FPS solicitados: TODO.
+    \item Conversión del espacio de color: TODO.
+    \item Preprocesamiento o filtro aplicado: TODO.
+    \item Manejo de errores de captura: TODO.
+    \item Entrada y salida del módulo: TODO.
+\end{itemize}
+
+% TODO: Añadir una captura del fotograma antes y después del preprocesamiento.
+
+\subsection{Módulo 2: Detección de Pose y Mano con MediaPipe}
+\label{subsec:implementacion_m2}
+
+Este módulo localiza los puntos de referencia necesarios para estimar la postura
+del brazo derecho y la apertura de la mano.
+
+\begin{itemize}
+    \item Modelos de MediaPipe utilizados: TODO.
+    \item Landmarks corporales y de la mano seleccionados: TODO.
+    \item Umbrales de confianza y visibilidad: TODO.
+    \item Criterio para seleccionar el brazo derecho: TODO.
+    \item Tratamiento de detecciones incompletas u oclusiones: TODO.
+\end{itemize}
+
+% TODO: Incluir una imagen con los landmarks detectados y correctamente
+% identificados.
+
+\subsection{Módulo 3: Cálculo de Ángulos y Apertura del Gripper}
+\label{subsec:implementacion_m3}
+
+A partir de los landmarks detectados, este módulo calcula los ángulos del
+hombro y del codo. Para tres puntos articulares consecutivos $A$, $B$ y $C$, el
+ángulo con vértice en $B$ puede calcularse mediante:
+
+\begin{equation}
+    \theta = \arccos\!\left(
+        \frac{(A-B) \cdot (C-B)}
+        {\lVert A-B \rVert\,\lVert C-B \rVert}
+    \right).
+    \label{eq:angulo_articular}
+\end{equation}
+
+Además, la distancia entre el pulgar y el índice se normaliza para obtener el
+nivel de apertura del gripper.
+
+\begin{itemize}
+    \item Definición de los vectores articulares: TODO.
+    \item Cálculo de los ángulos del hombro y del codo: TODO.
+    \item Cálculo y normalización de la apertura del gripper: TODO.
+    \item Límites angulares aplicados: TODO.
+    \item Ventana y método de suavizado: TODO.
+    \item Tratamiento de valores inválidos: TODO.
+\end{itemize}
+
+% TODO: Incluir un ejemplo numérico y una gráfica antes/después del suavizado.
+
+\subsection{Módulo 4: Control del UR5 y del Gripper RG2}
+\label{subsec:implementacion_m4}
+
+Este módulo establece la comunicación con CoppeliaSim y transforma las
+mediciones humanas en comandos seguros para el robot virtual.
+
+\begin{itemize}
+    \item Inicialización de la conexión ZeroMQ: TODO.
+    \item Identificación de las articulaciones del UR5: TODO.
+    \item Mapeo de ángulos humanos al espacio articular del robot: TODO.
+    \item Control de apertura y cierre del RG2: TODO.
+    \item Frecuencia de envío de comandos: TODO.
+    \item Límites de posición, velocidad, aceleración y jerk: TODO.
+    \item Recuperación ante pérdida de conexión: TODO.
+\end{itemize}
+
+% TODO: Añadir una captura del UR5 y el RG2 reproduciendo una postura.
+
+\subsection{Módulo 5: Visualización en Tiempo Real}
+\label{subsec:implementacion_m5}
+
+Este módulo presenta al usuario el video procesado y el estado del sistema.
+La interfaz muestra los landmarks detectados, los ángulos calculados, los FPS,
+el estado de la imitación y la conexión con CoppeliaSim.
+
+\begin{itemize}
+    \item Renderizado del video y de los landmarks detectados: TODO.
+    \item Presentación de los ángulos y la apertura del gripper: TODO.
+    \item Cálculo y presentación de los FPS: TODO.
+    \item Indicadores de imitación y conexión: TODO.
+    \item Controles disponibles para el usuario: TODO.
+\end{itemize}
+
+% TODO: Añadir una captura de la interfaz final con sus elementos identificados.
+
+\subsection{Integración de los Módulos}
+\label{subsec:integracion_modulos}
+
+Los cinco módulos se integran en un ciclo de procesamiento en tiempo real:
+
+\begin{enumerate}
+    \item Capturar y preprocesar el fotograma.
+    \item Detectar la pose corporal y los landmarks de la mano.
+    \item Validar la visibilidad de los puntos requeridos.
+    \item Calcular y suavizar los ángulos y la apertura del gripper.
+    \item Enviar los comandos al robot virtual cuando la imitación esté activa.
+    \item Actualizar la información mostrada en pantalla.
+\end{enumerate}
+
+% TODO: Insertar un diagrama de secuencia o un diagrama de flujo del programa.
+
+% ============================================================
+\section{Plan de Pruebas}
+\label{sec:plan_pruebas}
+% ============================================================
+
+El sistema se evaluará mediante pruebas funcionales y experimentales. Para cada
+prueba se registrarán las condiciones de ejecución, los resultados esperados y
+los valores obtenidos. Una vez ejecutadas todas las pruebas, esta redacción se
+actualizará a tiempo pasado y se incorporarán los resultados reales.
+
+\subsection{Pruebas Funcionales}
+\label{subsec:pruebas_funcionales}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}p{2.5cm}
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{2cm}}
+        \toprule
+        \textbf{Prueba} & \textbf{Resultado esperado} &
+        \textbf{Resultado obtenido} & \textbf{Estado} \\
+        \midrule
+        Captura de video & Mostrar video continuo desde la cámara. & TODO & TODO \\
+        Detección de pose & Identificar los landmarks del brazo derecho. & TODO & TODO \\
+        Cálculo angular & Obtener ángulos válidos de hombro y codo. & TODO & TODO \\
+        Control del UR5 & Reproducir el movimiento detectado. & TODO & TODO \\
+        Control del RG2 & Abrir y cerrar según el gesto de la mano. & TODO & TODO \\
+        Pérdida de conexión & Mantener activo el procesamiento de cámara. & TODO & TODO \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Pruebas funcionales del sistema.}
+    \label{tab:pruebas_funcionales}
+\end{table}
+
+\subsection{Escenarios Experimentales}
+\label{subsec:escenarios_experimentales}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}p{1.8cm}
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{2.5cm}}
+        \toprule
+        \textbf{Escenario} & \textbf{Condición} & \textbf{Propósito} &
+        \textbf{Repeticiones} \\
+        \midrule
+        E1 & Iluminación alta, media y baja. & Evaluar sensibilidad a la iluminación. & TODO \\
+        E2 & Fondo simple y fondo complejo. & Evaluar estabilidad de la detección. & TODO \\
+        E3 & Movimiento lento, normal y rápido. & Evaluar seguimiento dinámico. & TODO \\
+        E4 & Brazo visible y parcialmente ocluido. & Evaluar robustez ante oclusiones. & TODO \\
+        E5 & Diferentes distancias a la cámara. & Determinar el rango de funcionamiento. & TODO \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Escenarios considerados en la evaluación experimental.}
+    \label{tab:escenarios_experimentales}
+\end{table}
+
+\subsection{Métricas de Evaluación}
+\label{subsec:metricas_evaluacion}
+
+Las métricas consideradas para evaluar el sistema son:
+
+\begin{itemize}
+    \item FPS promedio, mínimo y desviación estándar.
+    \item Latencia aproximada entre la captura y la respuesta del simulador.
+    \item Porcentaje de fotogramas con detección válida.
+    \item Error absoluto medio de los ángulos del hombro y del codo.
+    \item Error de estimación de la apertura del gripper.
+    \item Tasa de éxito de los comandos enviados a CoppeliaSim.
+\end{itemize}
+
+El error absoluto medio (MAE) angular se calcula como:
+
+\begin{equation}
+    \mathrm{MAE} = \frac{1}{n}\sum_{i=1}^{n}
+    \left|\theta_i^{\mathrm{estimado}}-\theta_i^{\mathrm{referencia}}\right|.
+    \label{eq:mae_angular}
+\end{equation}
+
+% TODO: Explicar cómo se obtuvieron los valores angulares de referencia.
+
+% ============================================================
+\section{Resultados}
+\label{sec:resultados}
+% ============================================================
+
+\subsection{Resultados Funcionales}
+\label{subsec:resultados_funcionales}
+
+% TODO: Resumir los requerimientos cumplidos, las pruebas unitarias y las
+% pruebas de integración. Incluir evidencias visuales relevantes.
+
+\subsection{Rendimiento en Tiempo Real}
+\label{subsec:rendimiento_tiempo_real}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{2.4cm}
+        >{\raggedright\arraybackslash}p{2.4cm}
+        >{\raggedright\arraybackslash}p{2.4cm}}
+        \toprule
+        \textbf{Escenario} & \textbf{FPS promedio} &
+        \textbf{FPS mínimo} & \textbf{Latencia (ms)} \\
+        \midrule
+        Iluminación alta & TODO & TODO & TODO \\
+        Iluminación media & TODO & TODO & TODO \\
+        Iluminación baja & TODO & TODO & TODO \\
+        Movimiento rápido & TODO & TODO & TODO \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resultados de rendimiento del sistema.}
+    \label{tab:resultados_rendimiento}
+\end{table}
+
+% TODO: Incluir una gráfica de FPS y latencia a lo largo del tiempo.
+
+\subsection{Precisión Angular y Control del Robot}
+\label{subsec:precision_angular}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{3cm}
+        >{\raggedright\arraybackslash}p{3.4cm}}
+        \toprule
+        \textbf{Variable} & \textbf{MAE} & \textbf{Desviación estándar} \\
+        \midrule
+        Ángulo del hombro & TODO & TODO \\
+        Ángulo del codo & TODO & TODO \\
+        Apertura del gripper & TODO & TODO \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resultados de precisión del sistema.}
+    \label{tab:resultados_precision}
+\end{table}
+
+% TODO: Añadir gráficas que comparen los valores de referencia, los valores
+% estimados y los comandos enviados al robot.
+
+\subsection{Robustez ante Condiciones Variables}
+\label{subsec:resultados_robustez}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.25}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{3.5cm}
+        >{\raggedright\arraybackslash}p{3.5cm}}
+        \toprule
+        \textbf{Condición} & \textbf{Detecciones válidas (\%)} &
+        \textbf{Observaciones} \\
+        \midrule
+        Iluminación alta & TODO & TODO \\
+        Iluminación media & TODO & TODO \\
+        Iluminación baja & TODO & TODO \\
+        Fondo complejo & TODO & TODO \\
+        Oclusión parcial & TODO & TODO \\
+        Movimiento rápido & TODO & TODO \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resultados de robustez bajo diferentes condiciones.}
+    \label{tab:resultados_robustez}
+\end{table}
+
+% ============================================================
+\section{Análisis y Discusión de los Resultados}
+\label{sec:discusion_resultados}
+% ============================================================
+
+En esta sección se interpretan los resultados y se contrastan con los
+requerimientos y objetivos definidos en los informes anteriores.
+
+\begin{itemize}
+    \item TODO: Explicar qué escenarios produjeron los mejores y peores resultados.
+    \item TODO: Analizar el efecto del suavizado sobre la estabilidad y la latencia.
+    \item TODO: Examinar el compromiso entre precisión y velocidad de procesamiento.
+    \item TODO: Analizar las diferencias cinemáticas entre el brazo humano y el UR5.
+    \item TODO: Comparar los resultados con los requerimientos del Informe \#2.
+    \item TODO: Comparar brevemente los resultados con las soluciones existentes.
+    \item TODO: Explicar resultados inesperados y posibles fuentes de error.
+\end{itemize}
+
+% ============================================================
+\section{Limitaciones de la Implementación}
+\label{sec:limitaciones_implementacion}
+% ============================================================
+
+Entre las principales limitaciones que deben considerarse al interpretar los
+resultados se encuentran:
+
+\begin{itemize}
+    \item El uso de una sola cámara RGB limita la estimación real de profundidad.
+    \item La detección puede verse afectada por iluminación deficiente y oclusiones.
+    \item La estructura cinemática del brazo humano difiere de la del robot UR5.
+    \item La evaluación se realiza sobre un robot simulado y no sobre hardware real.
+    \item TODO: Añadir las demás limitaciones identificadas durante las pruebas.
+\end{itemize}
+
+% Las conclusiones generales, recomendaciones y trabajos futuros deben
+% desarrollarse en el Informe #4, no en este capítulo.
