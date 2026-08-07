@@ -1,49 +1,88 @@
-"""Prueba manual de apertura y cierre del RG2 en CoppeliaSim."""
+"""Prueba manual del RG2 mediante el controlador seguro de CoppeliaSim."""
 
-from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+from __future__ import annotations
 
+import time
 
-SIGNAL_NAME = "signal.RG2_open"
-
-
-def set_gripper_open(sim, is_open: bool) -> None:
-    """Envía al script original del RG2 la orden binaria de apertura."""
-    sim.setIntProperty(sim.handle_scene, SIGNAL_NAME, int(is_open))
+from modules.commands import GripperCommand, MimicCommand
+from modules.m4_coppeliasim import CoppeliaRobot, SafetyState
 
 
 def main() -> None:
-    print("Conectando con CoppeliaSim en localhost:23000...")
+    robot = CoppeliaRobot()
+    unsafe_session = False
+    sequence = 0
+
+    print("Conectando mediante el controlador seguro...")
+    if not robot.connect():
+        print("No se pudo completar el preflight. Revisa el estado mostrado.")
+        robot.close(normal_exit=False)
+        return
+
+    print("Comandos:")
+    print("  s : iniciar/pausar el canal manual (equivale a ESPACIO)")
+    print("  a : abrir RG2")
+    print("  c : cerrar RG2")
+    print("  e : parada de emergencia")
+    print("  r : rearmar despues de pulsar Play en CoppeliaSim")
+    print("  q : salir")
 
     try:
-        client = RemoteAPIClient()
-        sim = client.require("sim")
-    except Exception as exc:
-        print(f"No se pudo conectar con CoppeliaSim: {exc}")
-        print("Abre CoppeliaSim, carga la escena y vuelve a intentarlo.")
-        return
+        while True:
+            current_state = robot.snapshot.state
+            if current_state in {SafetyState.ESTOP, SafetyState.FAULT}:
+                unsafe_session = True
 
-    if sim.getSimulationState() == sim.simulation_stopped:
-        print("Conexión correcta, pero la simulación está detenida.")
-        print("Presiona Play en CoppeliaSim y ejecuta nuevamente esta prueba.")
-        return
+            text = input("> ").strip().lower()
+            if text == "s":
+                if current_state is SafetyState.RUNNING:
+                    changed = robot.pause()
+                    action = "Pausa/hold"
+                else:
+                    changed = robot.start_imitation(require_arm=False)
+                    action = "Inicio manual RG2"
+                print(f"{action}: {'OK' if changed else 'rechazado'}.")
 
-    print("Conexión correcta.")
-    print("Comandos: [a] abrir, [c] cerrar, [q] salir")
+            elif text in {"a", "c"}:
+                sequence += 1
+                report = robot.submit(
+                    MimicCommand(
+                        sequence=sequence,
+                        created_at=time.monotonic(),
+                        gripper=GripperCommand(
+                            aperture=1.0 if text == "a" else 0.0
+                        ),
+                    )
+                )
+                if report.gripper.accepted:
+                    print("Orden aceptada: ABRIR" if text == "a" else "Orden aceptada: CERRAR")
+                else:
+                    print(f"Orden rechazada: {report.gripper.reason}.")
 
-    while True:
-        command = input("> ").strip().lower()
+            elif text == "e":
+                unsafe_session = True
+                robot.emergency_stop("ESTOP solicitado desde test_rg2.py.")
+                print("ESTOP solicitado. Pulsa Play en CoppeliaSim antes de R.")
 
-        if command == "a":
-            set_gripper_open(sim, True)
-            print("Orden enviada: ABRIR")
-        elif command == "c":
-            set_gripper_open(sim, False)
-            print("Orden enviada: CERRAR")
-        elif command == "q":
-            print("Prueba finalizada.")
-            break
-        else:
-            print("Comando no reconocido. Usa a, c o q.")
+            elif text == "r":
+                if robot.snapshot.state in {SafetyState.ESTOP, SafetyState.FAULT}:
+                    unsafe_session = True
+                rearmed = robot.reconnect()
+                print("Rearme OK; pulsa s para continuar." if rearmed else "Rearme rechazado.")
+
+            elif text == "q":
+                break
+
+            else:
+                print("Usa s, a, c, e, r o q.")
+    except (EOFError, KeyboardInterrupt):
+        unsafe_session = True
+        robot.emergency_stop("Prueba RG2 interrumpida.")
+        print("\nPrueba interrumpida; ESTOP solicitado.")
+    finally:
+        if robot.snapshot.state in {SafetyState.ESTOP, SafetyState.FAULT}:
+            unsafe_session = True
+        robot.close(normal_exit=not unsafe_session)
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@ M3. Ángulos &
 \midrule
 M4. Brazo virtual &
   Tripleta de ángulos (float64, grados) &
-  Valores continuos $[0°, 180°]$; posibles discontinuidades en límites angulares &
+  Valores continuos $[0^\circ, 180^\circ]$; posibles discontinuidades en límites angulares &
   Clipping a rango físico válido por articulación;
   interpolación lineal para suavizado extra \\
 \midrule
@@ -180,7 +180,7 @@ RF-02 &
 \midrule
 RF-03 &
   El sistema debe calcular los ángulos de hombro, codo y muñeca con un
-  error máximo de $\pm$5° &
+  error máximo de $\pm 5^\circ$ &
   Alta & M3 \\
 \midrule
 RF-04 &
@@ -237,7 +237,7 @@ RNF-01 &
   FPS promedio medido sobre 500 frames consecutivos $\geq$ 20 \\
 \midrule
 RNF-02 &
-  Precisión angular: error medio (MAE) $\leq$ 5° respecto a medición
+  Precisión angular: error medio (MAE) $\leq 5^\circ$ respecto a medición
   de referencia &
   MAE calculado sobre 100 poses con transportador digital de referencia \\
 \midrule
@@ -431,18 +431,21 @@ directa acumulativa (ecuaciones \ref{eq:cinematica_s2}):
 
 A continuación se describen los bocetos del sistema y los flujos de
 pantalla principales. Los bocetos representan la disposición visual de
-la interfaz de usuario en la ventana de visualización de OpenCV.
+la interfaz de usuario en el dashboard Tkinter, que integra los frames
+procesados por OpenCV y la vista del Vision Sensor de CoppeliaSim.
 
 \subsubsection*{Boceto 1 -- Pantalla Principal (Vista en tiempo real)}
 
 La ventana principal muestra el frame de video (640$\times$480 px) con
-los siguientes elementos superpuestos:
+los siguientes elementos en un dashboard de escritorio. La cámara humana y la
+vista fija de CoppeliaSim aparecen en paneles del mismo tamaño; debajo se ubican
+la telemetría, el diagnóstico y los controles de seguridad:
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{images/boceto_pantalla.png}
-    \caption{Boceto de la pantalla principal del sistema (ventana OpenCV en
-             tiempo real). Elementos: contador FPS, número de frame,
+    \caption{Boceto de la pantalla principal del sistema en tiempo real.
+             Elementos: contador FPS, estado de seguridad,
              skeleton MediaPipe con landmarks,  brazo robótico
              virtual, ángulos articulares
              calculados en tiempo real.}

@@ -1,106 +1,117 @@
-"""Prueba manual y limitada de hombro y codo del UR5 en CoppeliaSim."""
+"""Prueba manual del brazo usando el mismo controlador seguro de la aplicacion."""
 
-import math
+from __future__ import annotations
 
-from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+import time
+
+from modules.commands import ArmCommand, MimicCommand
+from modules.m4_coppeliasim import CoppeliaRobot, SafetyState
 
 
-JOINT_COUNT = 6
-SHOULDER_INDEX = 1
-ELBOW_INDEX = 2
 STEP_DEG = 10.0
-MAX_OFFSET_DEG = 30.0
-MOTION_PARAMS = [
-    math.radians(45.0),
-    math.radians(90.0),
-    math.radians(360.0),
-]
-
-
-def clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
-
-
-def find_arm_joints(sim) -> list[int]:
-    ur5 = sim.getObject("/UR5")
-    return [
-        sim.getObject("./joint", {"proxy": ur5, "index": index})
-        for index in range(JOINT_COUNT)
-    ]
-
-
-def set_target(sim, handle: int, target: float) -> None:
-    sim.setJointTargetPosition(handle, target, MOTION_PARAMS)
+SETTLE_TIME_S = 0.15
 
 
 def main() -> None:
-    print("Conectando con CoppeliaSim en localhost:23000...")
+    robot = CoppeliaRobot()
+    unsafe_session = False
+    sequence = 0
+    shoulder_deg = 90.0
+    elbow_deg = 90.0
 
-    try:
-        client = RemoteAPIClient()
-        sim = client.require("sim")
-        joints = find_arm_joints(sim)
-    except Exception as exc:
-        print(f"No se pudo preparar la prueba: {exc}")
+    print("Conectando mediante el controlador seguro...")
+    if not robot.connect():
+        print("No se pudo completar el preflight. Revisa el estado mostrado.")
+        robot.close(normal_exit=False)
         return
 
-    if sim.getSimulationState() == sim.simulation_stopped:
-        print("La simulacion esta detenida. Presiona Play y vuelve a ejecutar.")
-        return
-
-    print("Articulaciones encontradas:")
-    for index, handle in enumerate(joints, start=1):
-        path = sim.getObjectAlias(handle, 2)
-        position_deg = math.degrees(sim.getJointPosition(handle))
-        print(f"  {index}: {path} ({position_deg:.1f} deg)")
-
-    confirmation = input("Continuar con movimientos limitados? [s/N]: ").strip().lower()
+    print("Esta prueba envia un lote coordinado y hace hold tras cada paso.")
+    confirmation = input("Continuar? [s/N]: ").strip().lower()
     if confirmation != "s":
-        print("Prueba cancelada sin mover el robot.")
+        robot.close(normal_exit=True)
+        print("Prueba cancelada sin enviar movimientos.")
         return
-
-    initial = [sim.getJointPosition(handle) for handle in joints]
-    targets = initial.copy()
-    max_offset = math.radians(MAX_OFFSET_DEG)
-    step = math.radians(STEP_DEG)
 
     print("Comandos:")
-    print("  h- / h+ : mover hombro -10 / +10 grados")
-    print("  e- / e+ : mover codo    -10 / +10 grados")
-    print("  r        : restaurar postura inicial")
-    print("  q        : restaurar y salir")
+    print("  h- / h+ : variar hombro en 10 grados humanos")
+    print("  c- / c+ : variar codo en 10 grados humanos")
+    print("  e        : parada de emergencia enclavada")
+    print("  r        : rearmar despues de pulsar Play en CoppeliaSim")
+    print("  q        : salida normal; home solo si nunca hubo ESTOP/FAULT")
 
-    while True:
-        command = input("> ").strip().lower()
+    try:
+        while True:
+            current_state = robot.snapshot.state
+            if current_state in {SafetyState.ESTOP, SafetyState.FAULT}:
+                unsafe_session = True
 
-        if command in {"h-", "h+"}:
-            delta = -step if command == "h-" else step
-            index = SHOULDER_INDEX
-        elif command in {"e-", "e+"}:
-            delta = -step if command == "e-" else step
-            index = ELBOW_INDEX
-        elif command == "r":
-            targets = initial.copy()
-            for handle, target in zip(joints, targets):
-                set_target(sim, handle, target)
-            print("Restaurando postura inicial.")
-            continue
-        elif command == "q":
-            for handle, target in zip(joints, initial):
-                set_target(sim, handle, target)
-            print("Restaurando postura inicial y finalizando.")
-            break
-        else:
-            print("Comando no reconocido: usa h-, h+, e-, e+, r o q.")
-            continue
+            text = input("> ").strip().lower()
+            if text in {"h-", "h+", "c-", "c+"}:
+                candidate_shoulder = shoulder_deg
+                candidate_elbow = elbow_deg
+                if text == "h-":
+                    candidate_shoulder -= STEP_DEG
+                elif text == "h+":
+                    candidate_shoulder += STEP_DEG
+                elif text == "c-":
+                    candidate_elbow -= STEP_DEG
+                else:
+                    candidate_elbow += STEP_DEG
 
-        targets[index] = clamp(
-            targets[index] + delta,
-            initial[index] - max_offset,
-            initial[index] + max_offset,
-        )
-        set_target(sim, joints[index], targets[index])
-        print(f"Objetivo: {math.degrees(targets[index]):.1f} grados")
+                if not robot.start_imitation(require_arm=True):
+                    print(
+                        f"Movimiento rechazado en estado {robot.snapshot.state.value}."
+                    )
+                    continue
+
+                sequence += 1
+                report = robot.submit(
+                    MimicCommand(
+                        sequence=sequence,
+                        created_at=time.monotonic(),
+                        arm=ArmCommand(
+                            shoulder_deg=candidate_shoulder,
+                            elbow_deg=candidate_elbow,
+                        ),
+                    )
+                )
+                time.sleep(SETTLE_TIME_S)
+                robot.pause()
+
+                if report.arm.accepted:
+                    shoulder_deg = candidate_shoulder
+                    elbow_deg = candidate_elbow
+                    print(
+                        f"Lote aceptado: hombro={shoulder_deg:.1f}, "
+                        f"codo={elbow_deg:.1f}; hold solicitado."
+                    )
+                else:
+                    print(f"Lote rechazado: {report.arm.reason}.")
+
+            elif text == "e":
+                unsafe_session = True
+                robot.emergency_stop("ESTOP solicitado desde test_ur5.py.")
+                print("ESTOP solicitado. Pulsa Play en CoppeliaSim antes de R.")
+
+            elif text == "r":
+                if robot.snapshot.state in {SafetyState.ESTOP, SafetyState.FAULT}:
+                    unsafe_session = True
+                rearmed = robot.reconnect()
+                print("Rearme OK; usa otro comando para mover." if rearmed else "Rearme rechazado.")
+
+            elif text == "q":
+                break
+
+            else:
+                print("Usa h-, h+, c-, c+, e, r o q.")
+    except (EOFError, KeyboardInterrupt):
+        unsafe_session = True
+        robot.emergency_stop("Prueba UR5 interrumpida.")
+        print("\nPrueba interrumpida; ESTOP solicitado.")
+    finally:
+        if robot.snapshot.state in {SafetyState.ESTOP, SafetyState.FAULT}:
+            unsafe_session = True
+        robot.close(normal_exit=not unsafe_session)
 
 
 if __name__ == "__main__":

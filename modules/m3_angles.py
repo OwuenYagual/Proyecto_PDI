@@ -1,182 +1,216 @@
-import numpy as np
+"""M3: validación, cálculo y suavizado de comandos humanos."""
+
+from __future__ import annotations
+
+import math
+import time
 from collections import deque
+from collections.abc import Callable
+from numbers import Real
 
 from config.settings import (
+    GRIPPER_D_MAX,
+    GRIPPER_D_MIN,
+    MIN_ARM_SEGMENT_LENGTH_PX,
     SMOOTHING_WINDOW,
     VISIBILITY_THRESHOLD,
-    GRIPPER_D_MIN,
-    GRIPPER_D_MAX,
 )
-from modules.m2_mediapipe import SHOULDER, ELBOW, WRIST_POSE, THUMB_TIP, INDEX_TIP
+from modules.commands import ArmCommand, GripperCommand, MimicCommand
+from modules.m2_mediapipe import ELBOW, INDEX_TIP, SHOULDER, THUMB_TIP, WRIST_POSE
 
 
 class AngleCalculator:
-    """
-    Módulo M3: calcula ángulos articulares del brazo derecho y apertura
-    del gripper a partir del resultado fusionado de M2.
-
-    Ángulos calculados:
-        - Hombro : entre eje vertical y vector hombro→codo        (Pose)
-        - Codo   : entre vector hombro→codo y vector codo→muñeca  (Pose)
-        - Gripper: distancia euclidiana normalizada índice-pulgar  (Hands)
-    """
+    """Convierte landmarks en comandos tipados con canales independientes."""
 
     JOINT_SHOULDER = "shoulder"
-    JOINT_ELBOW    = "elbow"
-    JOINT_GRIPPER  = "gripper"
+    JOINT_ELBOW = "elbow"
+    JOINT_GRIPPER = "gripper"
 
-    def __init__(self):
-        self._buffers: dict[str, deque] = {
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._sequence = 0
+        self._buffers: dict[str, deque[float]] = {
             self.JOINT_SHOULDER: deque(maxlen=SMOOTHING_WINDOW),
-            self.JOINT_ELBOW:    deque(maxlen=SMOOTHING_WINDOW),
-            self.JOINT_GRIPPER:  deque(maxlen=SMOOTHING_WINDOW),
+            self.JOINT_ELBOW: deque(maxlen=SMOOTHING_WINDOW),
+            self.JOINT_GRIPPER: deque(maxlen=SMOOTHING_WINDOW),
         }
 
-    # ------------------------------------------------------------------ #
-    # Interfaz pública                                                     #
-    # ------------------------------------------------------------------ #
+    def compute(self, result: dict | None) -> MimicCommand:
+        """Produce siempre un comando, incluyendo los motivos de cada rechazo.
 
-    def compute(self, result: dict | None) -> dict | None:
+        Un canal inválido no contamina los buffers ni impide usar el otro. Si
+        desaparece la mano no se envía una apertura nueva; el controlador puede
+        conservar así el último estado seguro del gripper.
         """
-        Calcula y suaviza los ángulos a partir del resultado de M2.
+        self._sequence += 1
+        created_at = float(self._clock())
 
-        Args:
-            result: diccionario {"arm": {...}, "hand": {...}} de M2.process().
-
-        Returns:
-            {
-              "shoulder": float,  # ángulo hombro  [0°, 180°]
-              "elbow":    float,  # ángulo codo    [0°, 180°]
-              "gripper":  float,  # apertura       [0.0, 1.0]
-              "valid":    bool,
-            }
-            None si no hay landmarks del brazo disponibles.
-        """
-        if result is None:
-            return None
-
-        arm  = result.get("arm")
-        hand = result.get("hand")
-
-        if not self._arm_available(arm):
-            return None
-
-        # ── Ángulos desde Pose ────────────────────────────────────────
-        raw_shoulder = self._angle_between(
-            arm[SHOULDER],
-            arm[SHOULDER],
-            arm[ELBOW],
-            reference="vertical",
-        )
-        raw_elbow = self._angle_between(
-            arm[SHOULDER],
-            arm[ELBOW],
-            arm[WRIST_POSE],
-        )
-
-        # ── Apertura gripper desde Hands ──────────────────────────────
-        raw_gripper = self._gripper_aperture(hand)
-        if raw_gripper is None:
-            gripper = self._current_smoothed(self.JOINT_GRIPPER, default=0.0)
+        if isinstance(result, dict):
+            arm_landmarks = result.get("arm")
+            hand_landmarks = result.get("hand")
         else:
-            gripper = self._smooth(self.JOINT_GRIPPER, raw_gripper)
+            arm_landmarks = None
+            hand_landmarks = None
 
-        # ── Media móvil ───────────────────────────────────────────────
-        return {
-            self.JOINT_SHOULDER: round(self._smooth(self.JOINT_SHOULDER, raw_shoulder), 2),
-            self.JOINT_ELBOW:    round(self._smooth(self.JOINT_ELBOW,    raw_elbow),    2),
-            self.JOINT_GRIPPER:  round(gripper, 3),
-            "valid":             self._arm_valid(arm),
-            "hand_detected":     hand is not None,
-        }
+        arm, arm_error = self._compute_arm(arm_landmarks)
+        gripper, gripper_error = self._compute_gripper(hand_landmarks)
+        return MimicCommand(
+            sequence=self._sequence,
+            created_at=created_at,
+            arm=arm,
+            gripper=gripper,
+            arm_error=arm_error,
+            gripper_error=gripper_error,
+        )
 
     def reset_buffers(self) -> None:
-        for buf in self._buffers.values():
-            buf.clear()
+        """Descarta todo el historial de suavizado sin reiniciar la secuencia."""
+        for buffer in self._buffers.values():
+            buffer.clear()
 
-    # ------------------------------------------------------------------ #
-    # Cálculo de ángulo                                                    #
-    # ------------------------------------------------------------------ #
+    def _compute_arm(self, arm: object) -> tuple[ArmCommand | None, str | None]:
+        error = self._validate_arm(arm)
+        if error is not None:
+            self._clear_arm_buffers()
+            return None, error
+
+        # ``_validate_arm`` garantiza la estructura de estos landmarks.
+        raw_shoulder = self._angle_between(  # type: ignore[index]
+            arm[SHOULDER],  # type: ignore[index]
+            arm[SHOULDER],  # type: ignore[index]
+            arm[ELBOW],  # type: ignore[index]
+            reference="vertical",
+        )
+        raw_elbow = self._angle_between(  # type: ignore[index]
+            arm[SHOULDER],  # type: ignore[index]
+            arm[ELBOW],  # type: ignore[index]
+            arm[WRIST_POSE],  # type: ignore[index]
+        )
+        if not (math.isfinite(raw_shoulder) and math.isfinite(raw_elbow)):
+            self._clear_arm_buffers()
+            return None, "arm_angle_non_finite"
+
+        shoulder = round(self._smooth(self.JOINT_SHOULDER, raw_shoulder), 2)
+        elbow = round(self._smooth(self.JOINT_ELBOW, raw_elbow), 2)
+        return ArmCommand(shoulder_deg=shoulder, elbow_deg=elbow), None
+
+    def _compute_gripper(
+        self,
+        hand: object,
+    ) -> tuple[GripperCommand | None, str | None]:
+        error = self._validate_hand(hand)
+        if error is not None:
+            self._buffers[self.JOINT_GRIPPER].clear()
+            return None, error
+
+        thumb = hand[THUMB_TIP]  # type: ignore[index]
+        index = hand[INDEX_TIP]  # type: ignore[index]
+        distance = math.hypot(index["x"] - thumb["x"], index["y"] - thumb["y"])
+        span = GRIPPER_D_MAX - GRIPPER_D_MIN
+        if not math.isfinite(distance) or span <= 0:
+            self._buffers[self.JOINT_GRIPPER].clear()
+            return None, "gripper_distance_invalid"
+
+        raw_aperture = min(1.0, max(0.0, (distance - GRIPPER_D_MIN) / span))
+        aperture = round(self._smooth(self.JOINT_GRIPPER, raw_aperture), 3)
+        return GripperCommand(aperture=aperture), None
 
     @staticmethod
     def _angle_between(
         p_proximal: dict,
-        p_central:  dict,
-        p_distal:   dict,
-        reference:  str | None = None,
+        p_central: dict,
+        p_distal: dict,
+        reference: str | None = None,
     ) -> float:
-        """
-        θ = arccos( v1·v2 / (|v1||v2|) )
-
-        reference="vertical"   → v1 = (0, -1)  eje hacia arriba
-        reference=None         → v1 = proximal - central
-        """
-        cx, cy = p_central["x"], p_central["y"]
-
-        v1 = (np.array([0.0, -1.0]) if reference == "vertical"
-              else np.array([p_proximal["x"] - cx, p_proximal["y"] - cy]))
-
-        v2 = np.array([p_distal["x"] - cx, p_distal["y"] - cy])
-
-        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
-        if n1 < 1e-6 or n2 < 1e-6:
-            return 0.0
-
-        cos_theta = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
-        return float(np.degrees(np.arccos(cos_theta)))
-
-    # ------------------------------------------------------------------ #
-    # Apertura del gripper (desde Hands)                                  #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _gripper_aperture(hand: dict | None) -> float | None:
-        """
-        Distancia euclidiana entre punta del índice (lm 8) y punta
-        del pulgar (lm 4), sincronizadas al espacio de Pose por M2.
-
-        Returns:
-            Apertura normalizada [0.0, 1.0].
-            None si no hay detección de mano.
-        """
-        if hand is None:
-            return None
-
-        if THUMB_TIP not in hand or INDEX_TIP not in hand:
-            return None
-
-        dx = hand[INDEX_TIP]["x"] - hand[THUMB_TIP]["x"]
-        dy = hand[INDEX_TIP]["y"] - hand[THUMB_TIP]["y"]
-        d  = np.sqrt(dx ** 2 + dy ** 2)
-
-        apertura = (d - GRIPPER_D_MIN) / (GRIPPER_D_MAX - GRIPPER_D_MIN)
-        return float(np.clip(apertura, 0.0, 1.0))
-
-    # ------------------------------------------------------------------ #
-    # Media móvil                                                          #
-    # ------------------------------------------------------------------ #
+        """Calcula el ángulo entre dos vectores en grados."""
+        center_x = float(p_central["x"])
+        center_y = float(p_central["y"])
+        if reference == "vertical":
+            vector_one = (0.0, -1.0)
+        else:
+            vector_one = (
+                float(p_proximal["x"]) - center_x,
+                float(p_proximal["y"]) - center_y,
+            )
+        vector_two = (
+            float(p_distal["x"]) - center_x,
+            float(p_distal["y"]) - center_y,
+        )
+        norm_one = math.hypot(*vector_one)
+        norm_two = math.hypot(*vector_two)
+        if norm_one == 0.0 or norm_two == 0.0:
+            return math.nan
+        cosine = (
+            vector_one[0] * vector_two[0] + vector_one[1] * vector_two[1]
+        ) / (norm_one * norm_two)
+        cosine = min(1.0, max(-1.0, cosine))
+        return math.degrees(math.acos(cosine))
 
     def _smooth(self, joint: str, value: float) -> float:
-        self._buffers[joint].append(value)
-        return float(np.mean(self._buffers[joint]))
-
-    def _current_smoothed(self, joint: str, default: float) -> float:
         buffer = self._buffers[joint]
-        return float(np.mean(buffer)) if buffer else default
+        buffer.append(value)
+        return sum(buffer) / len(buffer)
 
-    # ------------------------------------------------------------------ #
-    # Validación                                                           #
-    # ------------------------------------------------------------------ #
+    def _clear_arm_buffers(self) -> None:
+        self._buffers[self.JOINT_SHOULDER].clear()
+        self._buffers[self.JOINT_ELBOW].clear()
+
+    @classmethod
+    def _validate_arm(cls, arm: object) -> str | None:
+        if not isinstance(arm, dict):
+            return "arm_missing"
+        required = (SHOULDER, ELBOW, WRIST_POSE)
+        if not all(idx in arm for idx in required):
+            return "arm_landmark_missing"
+
+        for idx in required:
+            landmark = arm[idx]
+            if not isinstance(landmark, dict):
+                return "arm_landmark_invalid"
+            if not all(cls._is_finite_real(landmark.get(axis)) for axis in ("x", "y")):
+                return "arm_landmark_non_finite"
+            visibility = landmark.get("visibility")
+            if not cls._is_finite_real(visibility):
+                return "arm_visibility_non_finite"
+            if float(visibility) < VISIBILITY_THRESHOLD:
+                return "arm_not_visible"
+
+        upper_arm_length = cls._distance(arm[SHOULDER], arm[ELBOW])
+        forearm_length = cls._distance(arm[ELBOW], arm[WRIST_POSE])
+        if (
+            upper_arm_length < MIN_ARM_SEGMENT_LENGTH_PX
+            or forearm_length < MIN_ARM_SEGMENT_LENGTH_PX
+        ):
+            return "arm_segment_too_short"
+        return None
+
+    @classmethod
+    def _validate_hand(cls, hand: object) -> str | None:
+        if hand is None:
+            return "gripper_hand_missing"
+        if not isinstance(hand, dict):
+            return "gripper_hand_invalid"
+        if not all(idx in hand for idx in (THUMB_TIP, INDEX_TIP)):
+            return "gripper_landmark_missing"
+        for idx in (THUMB_TIP, INDEX_TIP):
+            landmark = hand[idx]
+            if not isinstance(landmark, dict):
+                return "gripper_landmark_invalid"
+            if not all(cls._is_finite_real(landmark.get(axis)) for axis in ("x", "y")):
+                return "gripper_landmark_non_finite"
+        return None
 
     @staticmethod
-    def _arm_available(arm: dict | None) -> bool:
-        return arm is not None and all(
-            idx in arm for idx in [SHOULDER, ELBOW, WRIST_POSE]
+    def _is_finite_real(value: object) -> bool:
+        return (
+            isinstance(value, Real)
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
         )
 
     @staticmethod
-    def _arm_valid(arm: dict) -> bool:
-        return all(
-            arm[idx]["visibility"] >= VISIBILITY_THRESHOLD
-            for idx in [SHOULDER, ELBOW, WRIST_POSE]
+    def _distance(first: dict, second: dict) -> float:
+        return math.hypot(
+            float(second["x"]) - float(first["x"]),
+            float(second["y"]) - float(first["y"]),
         )

@@ -10,9 +10,13 @@ UR5 con gripper RG2 en CoppeliaSim.
 - Detección del brazo derecho y la mano con MediaPipe Pose y Hands.
 - Cálculo y suavizado de los ángulos de hombro y codo.
 - Estimación de la apertura del gripper con la distancia entre índice y pulgar.
-- Control no bloqueante de un UR5 y un RG2 mediante la ZeroMQ Remote API.
-- Límites de posición, velocidad, aceleración y jerk configurables.
-- Visualización de FPS, ángulos, detección de mano y estado de la imitación.
+- Control asíncrono de un UR5 y un RG2 mediante la ZeroMQ Remote API.
+- Validación independiente del brazo y el gripper antes de cada orden.
+- Límites efectivos obtenidos de la intersección entre la configuración y la escena.
+- Parada de emergencia enclavada y watchdog de pérdida de pose.
+- Detección reactiva de colisiones del robot con el entorno.
+- Dashboard Tkinter con dos vistas, telemetría y controles visibles.
+- Vista fija del UR5 integrada mediante un Vision Sensor de CoppeliaSim.
 - Funcionamiento de la cámara aunque CoppeliaSim no esté disponible.
 
 ## Flujo del sistema
@@ -39,6 +43,7 @@ Las dependencias de Python se encuentran en `requirements.txt`:
 - OpenCV
 - MediaPipe
 - NumPy
+- Pillow
 - Cliente de la ZeroMQ Remote API de CoppeliaSim
 
 ## Instalación
@@ -63,9 +68,24 @@ python -m pip install -r requirements.txt
 4. Verifica que el servidor ZeroMQ utilice el puerto `23000`.
 5. Ejecuta la aplicación mientras la simulación continúa activa.
 
-La escena debe contener un objeto `/UR5` con sus seis articulaciones y el
-gripper RG2. El programa busca estos objetos al conectarse y conserva la postura
-inicial para restaurarla al finalizar.
+La escena debe contener un objeto `/UR5` con seis articulaciones revolutas y un
+gripper RG2 dentro de su jerarquía. Al conectarse, el programa comprueba los
+handles, los intervalos físicos, el modo de control y el estado de la simulación.
+La escena incluida también contiene `/RobotMimicVisionSensor`, configurado a
+640x480 para alimentar a 10 Hz el panel derecho del dashboard. La ausencia del
+sensor no deshabilita el control seguro: la interfaz muestra un placeholder.
+La escena versionada ya deja los seis joints en control dinámico de posición con
+perfil de movimiento activo (`dynPosMode = 1`). Si se sustituye la escena y ese
+perfil no está activo, el controlador permanece fuera de `READY` y no acepta
+movimientos, porque velocidad, aceleración y jerk sólo están garantizados en
+[modos compatibles](https://manual.coppeliarobotics.com/en/sim/simSetJointTargetPosition.htm).
+
+Las colecciones de colisión se crean durante la ejecución: los elementos móviles
+del UR5/RG2 se comparan con los objetos externos al árbol `/UR5`. Las
+autocolisiones y la predicción de trayectorias no forman parte de este proyecto.
+Los aliases se precargan durante el preflight para que ninguna RPC opcional se
+interponga entre [`sim.checkCollision`](https://manual.coppeliarobotics.com/en/sim/simCheckCollision.htm)
+y la parada de la simulación.
 
 Si CoppeliaSim no está abierto, la escena no está ejecutándose o la conexión
 falla, el procesamiento de cámara continúa sin controlar el robot virtual.
@@ -80,10 +100,38 @@ python main.py
 
 Controles:
 
-| Tecla | Acción |
+| Botón | Atajo | Acción |
+| --- | --- | --- |
+| **Iniciar/Pausar** | `Espacio` | Inicia la imitación o pausa haciendo `hold` |
+| **Emergencia** | `E` | Enclava la parada y detiene la simulación |
+| **Rearmar** | `R` | Reconecta después de pulsar **Play** nuevamente |
+| **Salir** | `Q` | Restaura `home` solo si no hubo emergencia o fallo |
+
+La ventana aparece antes de que termine el preflight. La captura, MediaPipe y la
+conexión se ejecutan fuera del hilo de Tkinter, por lo que los controles siguen
+respondiendo durante la inicialización y el rearme. Tres fallos consecutivos de
+cámara enclavan la emergencia y exigen reiniciar la aplicación.
+
+Después de una parada de emergencia, pulsar **Play** no reactiva por sí solo el
+control. Primero pulsa `R` para repetir el preflight y luego `Espacio`.
+
+### Estados de seguridad
+
+| Estado | Significado |
 | --- | --- |
-| `Espacio` | Inicia o pausa la imitación |
-| `Q` | Cierra la aplicación y restaura la postura inicial del robot |
+| `DISCONNECTED` | No existe un runtime validado; no se aceptan órdenes |
+| `READY` | Preflight superado y sin colisión; espera `Espacio` |
+| `RUNNING` | Acepta comandos frescos y vigila pose y colisiones |
+| `PAUSED` | Cola vacía y postura actual mantenida con `hold` |
+| `ESTOP` | Parada enclavada; la simulación recibió `stopSimulation(False)` |
+| `FAULT` | Fallo fatal de RPC, escena, cámara o cierre del worker |
+
+`R` solo está permitido desde `ESTOP`, `FAULT` o `DISCONNECTED`. El rearme no
+pulsa **Play** automáticamente ni inicia la imitación: vuelve a `READY` después
+de repetir todas las comprobaciones. Si la RPC de parada no pudo confirmarse,
+el `FAULT` permanece enclavado durante toda esa instancia y `R` se rechaza para
+no declarar segura una simulación que podría seguir moviéndose; detén la escena
+manualmente y reinicia la aplicación.
 
 Para una detección estable, coloca el brazo derecho completo frente a la cámara
 y procura mantener visibles el hombro, el codo, la muñeca, el pulgar y el índice.
@@ -98,28 +146,42 @@ Los parámetros principales están en `config/settings.py`:
 | Preprocesamiento | filtro gaussiano opcional |
 | MediaPipe | confianza, complejidad de modelos e intervalo de Hands |
 | Ángulos | ventana de suavizado, visibilidad y rango del gripper |
-| CoppeliaSim | host, puerto, frecuencia y límites seguros del UR5 |
-| Visualización | ventana usada para suavizar el cálculo de FPS |
+| CoppeliaSim | endpoint, frecuencias, timeouts y límites operativos del UR5 |
+| Seguridad | edad de comandos, watchdog, colisiones y retorno a `home` |
+| Visualización | suavizado de FPS, ruta, resolución y frecuencia del Vision Sensor |
+
+Defaults de seguridad:
+
+| Parámetro | Valor |
+| --- | ---: |
+| Presupuesto de conexión y preflight | 10 s |
+| Timeout RPC operativo | 500 ms |
+| Edad máxima de un comando | 250 ms |
+| Watchdog sin brazo válido | ESTOP a los 750 ms |
+| Detección de colisiones | 20 Hz y después de cada lote |
+| Fallo fatal de cámara | 3 lecturas consecutivas |
+| Readback de `home` | tolerancia 1°; plazo 5 s |
 
 Para ejecutar únicamente la captura y detección, cambia
 `COPPELIASIM_ENABLED = False`.
 
-Los ángulos humanos de hombro y codo se limitan al intervalo de 0° a 180° y se
-escalan al rango seguro configurado para el UR5. Ajusta esos límites solo después
-de validar la escena y evitar colisiones.
+Los ángulos humanos deben pertenecer al intervalo de 0° a 180°; un valor
+ausente, booleano, no finito o fuera de rango se rechaza, no se recorta. El rango
+operativo final de cada joint es la intersección entre los límites de
+`settings.py` y `sim.getJointInterval` de la escena.
 
 ## Pruebas
 
-Las pruebas unitarias del mapeo y los comandos del robot no necesitan una
-instancia activa de CoppeliaSim:
+Las pruebas unitarias de visión, configuración, validación, estados y transporte
+usan dobles de prueba y no necesitan una instancia activa de CoppeliaSim:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Los scripts `test_ur5.py` y `test_rg2.py` sirven para validación manual con la
-escena activa. Ejecútalos únicamente después de revisar que el espacio de trabajo
-del robot esté libre de obstáculos.
+Los scripts `test_ur5.py` y `test_rg2.py` usan el mismo controlador seguro de la
+aplicación para validación manual con la escena activa. Ambos aceptan `e` para la
+parada de emergencia y nunca restauran `home` después de una emergencia o fallo.
 
 ## Estructura
 
@@ -131,11 +193,18 @@ robot-mimic/
 │   ├── m1_capture.py
 │   ├── m2_mediapipe.py
 │   ├── m3_angles.py
-│   └── m4_coppeliasim.py
+│   ├── commands.py
+│   ├── m4_coppeliasim.py
+│   └── m5_gui.py
 ├── simulation/
 │   └── robot_mimic_ur5.ttt
 ├── tests/
-│   └── test_m4_coppeliasim.py
+│   ├── test_m2_mediapipe.py
+│   ├── test_m3_angles.py
+│   ├── test_m4_coppeliasim.py
+│   ├── test_m5_gui.py
+│   ├── test_main.py
+│   └── test_settings.py
 ├── main.py
 └── requirements.txt
 ```
@@ -147,14 +216,22 @@ robot-mimic/
 - **No se conecta a CoppeliaSim:** inicia la simulación antes de ejecutar
   `main.py` y confirma el host y el puerto configurados.
 - **No mueve el robot:** comprueba que el brazo detectado sea válido y que el
-  UR5 de la escena tenga la ruta `/UR5`.
+  UR5 de la escena tenga la ruta `/UR5`; revisa también el mensaje del preflight.
 - **El gripper no responde:** mantén visibles el pulgar y el índice y verifica
   que la escena use la señal `signal.RG2_open`.
 - **Movimiento inestable:** aumenta `SMOOTHING_WINDOW` o reduce
   `COPPELIASIM_UPDATE_HZ`.
+- **La simulación se detuvo:** revisa el HUD para distinguir una tecla `E`, una
+  colisión, pérdida prolongada de pose o un fallo de comunicación.
+- **No permite rearmar:** retira la colisión, pulsa **Play** en CoppeliaSim y
+  luego `R`; el controlador no inicia la simulación automáticamente.
 
 ## Seguridad
 
-Este proyecto controla un robot simulado. Antes de adaptar el código a hardware
-real, añade límites físicos, parada de emergencia, detección de colisiones y una
-validación independiente de cada comando.
+Las protecciones descritas aquí pertenecen exclusivamente a CoppeliaSim. La
+parada depende de la conexión con el simulador, la detección es reactiva después
+del contacto y no existe planificación de trayectorias ni comprobación de
+autocolisiones.
+Este código no es un sistema de seguridad certificado y no debe conectarse a un
+robot físico sin una arquitectura de seguridad independiente y específica para
+el hardware.

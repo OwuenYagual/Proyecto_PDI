@@ -1,4 +1,5 @@
 opencv-contrib-python==4.11.0.86
 mediapipe==0.10.21
 numpy<2
-coppeliasim-zmqremoteapi-client
+Pillow==12.3.0
+coppeliasim-zmqremoteapi-client==2.0.4

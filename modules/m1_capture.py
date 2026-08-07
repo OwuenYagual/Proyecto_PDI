@@ -67,8 +67,9 @@ class CaptureModule:
         if not ok:
             return False, None, None
 
+        # Mantener la geometría real para inferencia. El espejo es solo una
+        # transformación visual y se aplica al frame mostrado desde ``main``.
         bgr = self._resize(bgr)
-        bgr = cv2.flip(bgr, 1)  # espejo horizontal para simular cámara frontal
 
         inference_bgr = self._gaussian_blur(bgr) if self.apply_blur else bgr
 

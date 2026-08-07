@@ -5,40 +5,93 @@
 \label{chap:desarrollo_resultados}
 % ============================================================
 
-En este capítulo se describe la implementación de la solución propuesta para
-el sistema de imitación de movimientos, la integración de sus módulos y el
-procedimiento experimental utilizado para evaluarlo. Finalmente, se presentan
-y analizan los resultados obtenidos en términos de funcionamiento, rendimiento,
-precisión y robustez.
+En este capítulo se presenta la implementación final de Robot Mimic, un sistema
+que estima el movimiento del brazo derecho y el gesto de apertura de la mano a
+partir de video RGB, y los utiliza para controlar un UR5 con gripper RG2 dentro
+de CoppeliaSim. También se documentan la integración de los módulos, las
+protecciones añadidas al simulador y las evidencias obtenidas mediante pruebas
+unitarias y pruebas de integración.
+
+El alcance de esta versión se limita al entorno virtual. Por tanto, los
+mecanismos de parada, límites y detección de colisiones descritos en este
+capítulo no constituyen una arquitectura de seguridad para un robot físico.
 
 % ============================================================
 \section{Descripción General de la Solución Implementada}
 \label{sec:descripcion_solucion}
 % ============================================================
 
-El sistema implementado captura en tiempo real los movimientos del brazo
-derecho y de la mano del usuario mediante una cámara RGB. Los fotogramas son
-procesados con MediaPipe para detectar los puntos de referencia corporales y de
-la mano. A partir de estos puntos se calculan los ángulos articulares y el nivel
-de apertura del gripper. Finalmente, los valores obtenidos se transforman en
-comandos para controlar un robot UR5 y un gripper RG2 en CoppeliaSim.
+El sistema captura fotogramas de una cámara convencional mediante
+OpenCV~\cite{Bradski2000}. Cada imagen se procesa sin reflexión horizontal para
+que los índices anatómicos de MediaPipe conserven su significado original. El
+modelo BlazePose localiza el hombro, el codo y la muñeca derechos, mientras que
+MediaPipe Hands detecta hasta dos manos y selecciona la muñeca más cercana al
+brazo seguido~\cite{Bazarevskyetal2020,Lugaresietal2019}.
 
-% TODO: Insertar el diagrama de bloques final de la solución.
-% Ejemplo:
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{images/diagrama_final.png}
-%     \caption{Arquitectura final de la solución implementada.}
-%     \label{fig:arquitectura_final}
-% \end{figure}
+Los puntos válidos se transforman en un comando tipado que contiene dos canales
+independientes: un lote coordinado para hombro y codo, y un objetivo para el
+gripper. Un worker dedicado valida y transmite el comando mediante la ZeroMQ
+Remote API. Finalmente, la ventana de OpenCV muestra la imagen reflejada solo
+para facilitar la interacción tipo espejo, junto con los ángulos, la apertura
+del gripper y el estado de seguridad.
 
-En comparación con el diseño conceptual presentado en el Informe \#2, la
-implementación final incorporó los siguientes cambios o ajustes:
+\begin{figure}[H]
+    \centering
+    \fbox{
+        \begin{minipage}{0.94\textwidth}
+            \centering
+            \textbf{M1: cámara y preprocesamiento}\\
+            Frame BGR para visualización y frame RGB sin espejo para inferencia
+            \[
+                \Downarrow
+            \]
+            \textbf{M2: MediaPipe Pose + Hands}\\
+            Brazo derecho 12--14--16 y mano asociada por proximidad de muñecas
+            \[
+                \Downarrow
+            \]
+            \textbf{M3: validación, ángulos y suavizado}\\
+            \texttt{MimicCommand} con canales de brazo y gripper independientes
+            \[
+                \Downarrow
+            \]
+            \textbf{M4: worker ZeroMQ y CoppeliaSim}\\
+            Preflight, límites efectivos, watchdog, colisiones, ESTOP y readback
+            \[
+                \Downarrow
+            \]
+            \textbf{M5: HUD y controles}\\
+            FPS, mediciones, estado, diagnósticos y par de colisión
+        \end{minipage}
+    }
+    \caption{Arquitectura final de Robot Mimic.}
+    \label{fig:arquitectura_final}
+\end{figure}
+
+La implementación difiere del diseño conceptual del Informe \#2 en los
+siguientes aspectos:
 
 \begin{itemize}
-    \item TODO: Describir los cambios realizados sobre el diseño original.
-    \item TODO: Justificar las decisiones técnicas tomadas durante el desarrollo.
-    \item TODO: Indicar las funcionalidades planificadas que no fueron implementadas.
+    \item La representación 2D de un brazo de tres grados de libertad fue
+    reemplazada por una escena de CoppeliaSim con un UR5 de seis articulaciones
+    y un gripper RG2. En esta fase se controlan el hombro, el codo y el estado
+    binario del gripper.
+    \item Se corrigió la selección anatómica del brazo derecho. En una imagen
+    sin espejo, MediaPipe asigna los índices 12, 14 y 16 al hombro, codo y
+    muñeca derechos; los índices 11, 13 y 15 corresponden al lado izquierdo.
+    \item La mano dejó de inferirse a partir de landmarks corporales. Se utiliza
+    MediaPipe Hands, se detectan hasta dos manos y se asocia la más cercana a la
+    muñeca derecha.
+    \item Se sustituyeron diccionarios con una bandera global de validez por
+    modelos inmutables y reportes de validación separados para brazo y gripper.
+    \item La comunicación síncrona se aisló en un worker propietario del cliente
+    ZeroMQ. El hilo de cámara publica únicamente el comando más reciente.
+    \item Se incorporaron estados explícitos, límites de escena, hold, watchdog,
+    parada de emergencia, detección reactiva de colisiones y retorno a
+    \textit{home} con readback.
+    \item No se implementaron control de muñeca, estimación de profundidad,
+    planificación predictiva, comprobación de autocolisiones ni conexión con
+    hardware real.
 \end{itemize}
 
 % ============================================================
@@ -46,27 +99,42 @@ implementación final incorporó los siguientes cambios o ajustes:
 \label{sec:entorno_implementacion}
 % ============================================================
 
-La Tabla~\ref{tab:entorno_implementacion} resume los recursos de hardware y
-software utilizados para implementar y evaluar el sistema.
+La Tabla~\ref{tab:entorno_implementacion} resume el equipo y las versiones
+utilizadas durante la implementación y verificación. La resolución y la
+frecuencia indicadas para la cámara son valores solicitados al controlador; el
+dispositivo puede negociar valores distintos durante una ejecución real.
 
 \begin{table}[H]
     \centering
     \renewcommand{\arraystretch}{1.25}
-    \begin{tabularx}{\textwidth}{p{3.5cm} X}
+    \small
+    \begin{tabularx}{\textwidth}{p{3.4cm} X}
         \toprule
         \textbf{Recurso} & \textbf{Descripción} \\
         \midrule
-        Computador & TODO: Procesador, memoria RAM y sistema operativo. \\
-        Cámara & TODO: Modelo, resolución y frecuencia de captura. \\
-        Python & TODO: Versión utilizada. \\
-        OpenCV & TODO: Versión utilizada. \\
-        MediaPipe & TODO: Versión y modelos empleados. \\
-        CoppeliaSim & TODO: Versión y características de la escena. \\
-        Robot virtual & UR5 con gripper RG2. \\
-        Comunicación & ZeroMQ Remote API, puerto TODO. \\
+        Computador &
+        HP 250 G10, Intel Core i5-1334U de 10 núcleos y 12 hilos, 16 GB de RAM. \\
+        Sistema operativo &
+        Microsoft Windows 11 Pro de 64 bits, versión 10.0.26200. \\
+        Cámara &
+        HP True Vision HD Camera; configuración solicitada de
+        $640\times480$ píxeles a 30 FPS. \\
+        Python &
+        Python 3.11.9 en el entorno limpio de dependencias e integración;
+        Python 3.12.13 para la ejecución unitaria final con dobles. \\
+        OpenCV y NumPy &
+        \texttt{opencv-contrib-python} 4.11.0.86 y NumPy 1.26.4. \\
+        MediaPipe &
+        MediaPipe 0.10.21; Pose y Hands con complejidad de modelo 0. \\
+        CoppeliaSim &
+        CoppeliaSim 4.10.0; escena \texttt{robot\_mimic\_ur5.ttt} con
+        \texttt{/UR5}, seis joints revolutos y RG2 descendiente. \\
+        Comunicación &
+        \texttt{coppeliasim-zmqremoteapi-client} 2.0.4,
+        \texttt{localhost:23000}. \\
         \bottomrule
     \end{tabularx}
-    \caption{Entorno de implementación y evaluación del proyecto.}
+    \caption{Entorno de implementación y verificación.}
     \label{tab:entorno_implementacion}
 \end{table}
 
@@ -78,197 +146,430 @@ software utilizados para implementar y evaluar el sistema.
 \subsection{Módulo 1: Captura y Preprocesamiento de Imagen}
 \label{subsec:implementacion_m1}
 
-Este módulo obtiene los fotogramas de la cámara y los prepara para las etapas
-posteriores del sistema.
+El módulo M1 utiliza \texttt{cv2.VideoCapture} con el índice de cámara 0. Al
+inicializarse solicita $640\times480$ píxeles, 30 FPS y un buffer de un
+fotograma para reducir la acumulación de imágenes antiguas. Si el dispositivo
+no puede abrirse, se genera un error con un diagnóstico explícito.
+
+Cada lectura produce dos salidas:
 
 \begin{itemize}
-    \item Configuración de la cámara: TODO.
-    \item Resolución y FPS solicitados: TODO.
-    \item Conversión del espacio de color: TODO.
-    \item Preprocesamiento o filtro aplicado: TODO.
-    \item Manejo de errores de captura: TODO.
-    \item Entrada y salida del módulo: TODO.
+    \item un frame BGR redimensionado, utilizado para dibujar el skeleton y el
+    HUD; y
+    \item un frame RGB destinado a MediaPipe.
 \end{itemize}
 
-% TODO: Añadir una captura del fotograma antes y después del preprocesamiento.
+El redimensionado emplea interpolación \texttt{INTER\_AREA} al reducir e
+\texttt{INTER\_LINEAR} al ampliar. La configuración permite aplicar un filtro
+gaussiano de kernel $5\times5$, aunque permanece desactivado por defecto. La
+conversión BGR$\rightarrow$RGB se realiza después de este preprocesamiento.
+
+La inferencia no recibe una imagen reflejada. El volteo horizontal se aplica
+únicamente al frame final mostrado. De esta manera se evita intercambiar el
+brazo derecho con el izquierdo durante la detección.
+
+Ante una lectura fallida, el bucle principal solicita un hold en el primer
+fallo. Si se acumulan tres lecturas consecutivas fallidas, la situación se
+considera fatal, se enclava la parada de emergencia y no se ejecuta el retorno
+a \textit{home}.
 
 \subsection{Módulo 2: Detección de Pose y Mano con MediaPipe}
 \label{subsec:implementacion_m2}
 
-Este módulo localiza los puntos de referencia necesarios para estimar la postura
-del brazo derecho y la apertura de la mano.
+M2 combina MediaPipe Pose y MediaPipe Hands~\cite{Bazarevskyetal2020,
+Lugaresietal2019}. Pose opera en modo de video con suavizado interno, confianza
+mínima de detección de 0.7 y confianza de seguimiento de 0.5. Hands utiliza los
+mismos umbrales, detecta un máximo de dos manos y se ejecuta cada dos
+fotogramas; entre ejecuciones se reutiliza el último resultado procesado, que
+también puede estar vacío.
+
+Los landmarks corporales seleccionados son:
 
 \begin{itemize}
-    \item Modelos de MediaPipe utilizados: TODO.
-    \item Landmarks corporales y de la mano seleccionados: TODO.
-    \item Umbrales de confianza y visibilidad: TODO.
-    \item Criterio para seleccionar el brazo derecho: TODO.
-    \item Tratamiento de detecciones incompletas u oclusiones: TODO.
+    \item 12: hombro derecho;
+    \item 14: codo derecho; y
+    \item 16: muñeca derecha.
 \end{itemize}
 
-% TODO: Incluir una imagen con los landmarks detectados y correctamente
-% identificados.
+Para la mano se emplean la muñeca (0), la punta del pulgar (4) y la punta del
+índice (8). Las coordenadas normalizadas se convierten a píxeles usando el
+ancho y alto reales del frame, no solo la resolución configurada.
+
+La asociación de la mano se realiza calculando la distancia euclidiana entre
+la muñeca corporal y la muñeca de cada mano candidata. Se selecciona la menor
+distancia siempre que no supere el 15\% de la diagonal del frame. Una muñeca
+corporal invisible o una asociación más lejana se rechaza.
+
+Para asociar una mano, M2 exige que la muñeca corporal sea finita y tenga una
+visibilidad mínima de 0.5, y que la muñeca de la mano candidata sea finita. La
+validación completa de hombro, codo, muñeca, pulgar e índice se realiza después
+en M3. Si la pose desaparece se limpia la caché de manos; si solo desaparece la
+mano, el brazo puede seguir produciendo comandos válidos.
 
 \subsection{Módulo 3: Cálculo de Ángulos y Apertura del Gripper}
 \label{subsec:implementacion_m3}
 
-A partir de los landmarks detectados, este módulo calcula los ángulos del
-hombro y del codo. Para tres puntos articulares consecutivos $A$, $B$ y $C$, el
-ángulo con vértice en $B$ puede calcularse mediante:
+M3 convierte las coordenadas en comandos humanos. Para tres puntos
+articulares consecutivos $A$, $B$ y $C$, el ángulo con vértice en $B$ se
+calcula mediante el producto escalar~\cite{GonzalezWoods2018}:
 
 \begin{equation}
-    \theta = \arccos\!\left(
+    \theta = \frac{180}{\pi}\arccos\!\left(
         \frac{(A-B) \cdot (C-B)}
         {\lVert A-B \rVert\,\lVert C-B \rVert}
     \right).
     \label{eq:angulo_articular}
 \end{equation}
 
-Además, la distancia entre el pulgar y el índice se normaliza para obtener el
-nivel de apertura del gripper.
+Para el hombro, el primer vector es la vertical de la imagen $(0,-1)$ y el
+segundo vector une hombro y codo. Para el codo se utilizan los vectores
+codo--hombro y codo--muñeca. El coseno se acota al intervalo $[-1,1]$ antes de
+aplicar el arcocoseno para evitar errores numéricos; el factor $180/\pi$
+expresa el resultado en grados.
+
+La apertura del gripper se obtiene de la distancia $d$ entre las puntas del
+pulgar y el índice:
+
+\begin{equation}
+    a = \operatorname{clip}\!\left(
+        \frac{d-d_{\mathrm{min}}}{d_{\mathrm{max}}-d_{\mathrm{min}}},\,0,\,1
+    \right),
+    \qquad d_{\mathrm{min}}=20\ \text{px},\quad
+    d_{\mathrm{max}}=120\ \text{px}.
+    \label{eq:apertura_gripper}
+\end{equation}
+
+Los ángulos de hombro y codo y la apertura del gripper poseen buffers
+independientes de media móvil, cada uno con una ventana de cinco muestras. Una
+muestra inválida no se inserta en el suavizado y limpia solamente los buffers
+del canal afectado.
+
+Antes del cálculo se exige:
 
 \begin{itemize}
-    \item Definición de los vectores articulares: TODO.
-    \item Cálculo de los ángulos del hombro y del codo: TODO.
-    \item Cálculo y normalización de la apertura del gripper: TODO.
-    \item Límites angulares aplicados: TODO.
-    \item Ventana y método de suavizado: TODO.
-    \item Tratamiento de valores inválidos: TODO.
+    \item estructura completa de landmarks;
+    \item coordenadas, visibilidad y ángulos finitos;
+    \item visibilidad mínima de 0.5 para hombro, codo y muñeca; y
+    \item longitud mínima de 5 píxeles para brazo y antebrazo.
 \end{itemize}
 
-% TODO: Incluir un ejemplo numérico y una gráfica antes/después del suavizado.
+El resultado es un \texttt{MimicCommand} inmutable que contiene un número de
+secuencia, un tiempo monotónico y, cuando corresponde, un
+\texttt{ArmCommand} o un \texttt{GripperCommand}. La pérdida de la mano no
+genera un cierre artificial: se omite el nuevo objetivo y el RG2 conserva su
+último estado.
 
-\subsection{Módulo 4: Control del UR5 y del Gripper RG2}
+\subsection{Módulo 4: Control Seguro del UR5 y del Gripper RG2}
 \label{subsec:implementacion_m4}
 
-Este módulo establece la comunicación con CoppeliaSim y transforma las
-mediciones humanas en comandos seguros para el robot virtual.
+M4 concentra la comunicación con CoppeliaSim. Un único worker crea y utiliza
+el cliente ZeroMQ; el hilo de cámara nunca ejecuta una RPC. El comando
+pendiente se almacena en una cola lógica de tamaño uno, por lo que una muestra
+nueva sustituye a cualquier muestra aún no procesada.
+
+\subsubsection*{Preflight y límites efectivos}
+
+La conexión dispone de 10 s para completar la carga y el preflight. Después de
+obtener el objeto remoto \texttt{sim}, el timeout operativo de cada RPC se fija
+en 500 ms. El controlador permanece fuera de \texttt{READY} si no puede
+confirmar:
 
 \begin{itemize}
-    \item Inicialización de la conexión ZeroMQ: TODO.
-    \item Identificación de las articulaciones del UR5: TODO.
-    \item Mapeo de ángulos humanos al espacio articular del robot: TODO.
-    \item Control de apertura y cierre del RG2: TODO.
-    \item Frecuencia de envío de comandos: TODO.
-    \item Límites de posición, velocidad, aceleración y jerk: TODO.
-    \item Recuperación ante pérdida de conexión: TODO.
+    \item que la simulación está ejecutándose;
+    \item que \texttt{/UR5} existe y contiene seis handles de joints únicos;
+    \item que los seis joints son revolutos y que la búsqueda no ingresó al
+    subárbol del RG2;
+    \item que cada joint es cinemático o dinámico con control de posición y
+    perfil de movimiento compatible;
+    \item que el RG2 está presente como descendiente del UR5; y
+    \item que existen formas móviles del robot y formas externas de entorno.
 \end{itemize}
 
-% TODO: Añadir una captura del UR5 y el RG2 reproduciendo una postura.
+Para cada joint se consulta \texttt{sim.getJointInterval}. En los joints
+controlados de hombro y codo, el intervalo operativo se obtiene mediante:
+
+\begin{equation}
+    I_{\mathrm{efectivo}} =
+    I_{\mathrm{config}}\cap I_{\mathrm{escena}}.
+    \label{eq:limite_efectivo}
+\end{equation}
+
+Una intersección vacía en hombro o codo impide alcanzar \texttt{READY}. Para
+los otros cuatro joints, que solo participan en hold y retorno a
+\textit{home}, el límite efectivo coincide con el intervalo informado por la
+escena. La escena incluida fue actualizada para que los seis joints dinámicos
+utilicen control de posición con perfil de movimiento activo.
+
+\subsubsection*{Mapeo y actuación}
+
+Los ángulos humanos se admiten únicamente en $[0^\circ,180^\circ]$. Con los
+límites configurados de $[-60^\circ,0^\circ]$, el mapeo es:
+
+\begin{align}
+    q_{\mathrm{hombro}} &=
+    q_{\mathrm{max}} + \frac{\theta_{\mathrm{hombro}}}{180}
+    (q_{\mathrm{min}}-q_{\mathrm{max}}), \\
+    q_{\mathrm{codo}} &=
+    q_{\mathrm{max}} + \frac{180-\theta_{\mathrm{codo}}}{180}
+    (q_{\mathrm{min}}-q_{\mathrm{max}}).
+    \label{eq:mapeo_ur5}
+\end{align}
+
+El lote de hombro y codo es indivisible durante la validación: si uno de los
+dos valores falla, ambos se rechazan. El gripper se valida por separado. Una
+apertura normalizada mayor o igual que 0.5 escribe 1 en
+\texttt{signal.RG2\_open}; un valor menor escribe 0.
+
+Los objetivos articulares se envían a 20 Hz como máximo, con velocidad,
+aceleración y jerk configurados en $45^\circ/\mathrm{s}$,
+$90^\circ/\mathrm{s}^{2}$ y $360^\circ/\mathrm{s}^{3}$, respectivamente.
+
+Cada comando se valida dos veces: al publicarlo y justo antes de actuar. Se
+rechazan tipos incorrectos, booleanos, \texttt{NaN}, infinito, valores fuera
+del rango humano, objetivos fuera del límite efectivo y comandos con más de
+250 ms de antigüedad.
+
+\subsubsection*{Estados y controles de seguridad}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \small
+    \begin{tabularx}{\textwidth}{p{3cm} X}
+        \toprule
+        \textbf{Estado} & \textbf{Significado} \\
+        \midrule
+        \texttt{DISCONNECTED} & No existe un runtime validado. \\
+        \texttt{READY} & El preflight terminó sin colisiones; espera al usuario. \\
+        \texttt{RUNNING} & Acepta comandos frescos y ejecuta la vigilancia. \\
+        \texttt{PAUSED} & La cola está vacía y se ordenó mantener la postura. \\
+        \texttt{ESTOP} & La parada está enclavada y se solicitó detener la simulación. \\
+        \texttt{FAULT} & Existe un fallo de comunicación, escena o verificación. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Estados del controlador de seguridad.}
+    \label{tab:estados_seguridad}
+\end{table}
+
+La barra espaciadora alterna entre ejecución y pausa. Al pausar se vacía la
+cola y el worker vuelve a enviar las posiciones leídas para producir un hold.
+Si el brazo deja de ser válido, el hold se solicita de inmediato; si no se
+recibe un brazo válido durante 750 ms, se activa el ESTOP.
+
+La tecla \texttt{E} vacía la cola, enclava la sesión y ejecuta
+\texttt{sim.stopSimulation(False)} una sola vez. Un fallo de esa RPC permanece
+como \texttt{FAULT}; no puede ocultarse con una segunda pulsación ni rearmarse
+dentro de la misma instancia.
+
+Después de una parada confirmada, el usuario debe pulsar Play en CoppeliaSim y
+luego \texttt{R}. El controlador crea un runtime nuevo, repite todo el preflight
+y queda en \texttt{READY}; todavía se necesita Espacio para volver a imitar.
+La tecla \texttt{Q} solicita una salida normal.
+
+\subsubsection*{Colisiones y retorno a home}
+
+La colección del robot contiene las formas móviles desde el primer joint,
+incluido el RG2. La colección del entorno contiene todas las formas que no
+pertenecen al árbol \texttt{/UR5}. Esta separación excluye las autocolisiones
+del alcance de la fase actual.
+
+\texttt{sim.checkCollision} se ejecuta a 20 Hz, inmediatamente antes de cada
+actuación, después de cada lote y durante el retorno a \textit{home}. Los
+aliases de las formas se precargan durante el preflight, de modo que ninguna
+consulta opcional se interponga entre la detección y la parada.
+
+La posición inicial de los seis joints se conserva como \textit{home}. Solo una
+salida normal puede solicitar el retorno. El worker reutiliza los límites, la
+vigilancia de colisiones y un readback con tolerancia de $1^\circ$ y plazo de
+5 s. Antes de declarar éxito se realiza una última comprobación de colisión. Un
+ESTOP, una colisión, un \texttt{FAULT} o un timeout impiden el retorno y
+enclavan la sesión como insegura.
 
 \subsection{Módulo 5: Visualización en Tiempo Real}
 \label{subsec:implementacion_m5}
 
-Este módulo presenta al usuario el video procesado y el estado del sistema.
-La interfaz muestra los landmarks detectados, los ángulos calculados, los FPS,
-el estado de la imitación y la conexión con CoppeliaSim.
+M5 se implementa como un dashboard oscuro de escritorio con Tkinter/ttk. Un
+hilo de visión posee la cámara, MediaPipe y los buffers de suavizado; el hilo de
+Tkinter solo consume snapshots inmutables mediante \texttt{after()}, por lo que
+el preflight, la inferencia y el rearme no bloquean los controles. El dashboard
+presenta dos paneles de igual tamaño: la cámara humana anotada y la vista fija
+del UR5 obtenida de \texttt{/RobotMimicVisionSensor}.
+
+La cámara humana se refleja únicamente después de la inferencia. Las tarjetas
+de telemetría muestran:
 
 \begin{itemize}
-    \item Renderizado del video y de los landmarks detectados: TODO.
-    \item Presentación de los ángulos y la apertura del gripper: TODO.
-    \item Cálculo y presentación de los FPS: TODO.
-    \item Indicadores de imitación y conexión: TODO.
-    \item Controles disponibles para el usuario: TODO.
+    \item FPS suavizados sobre las últimas 30 duraciones de frame;
+    \item estado de seguridad y mensaje diagnóstico;
+    \item ángulos humanos de hombro y codo;
+    \item porcentaje de apertura del gripper;
+    \item aceptación o motivo de rechazo por canal; y
+    \item aliases del par implicado en una colisión; y
+    \item disponibilidad de la cámara y del Vision Sensor.
 \end{itemize}
 
-% TODO: Añadir una captura de la interfaz final con sus elementos identificados.
+Los botones Iniciar/Pausar, Emergencia, Rearmar y Salir comparten el mismo
+despachador que los atajos Espacio, E, R y Q. Su habilitación se deriva del
+estado de seguridad. La interfaz lee snapshots locales del controlador y del
+runtime; por tanto, el renderizado no realiza RPC y permanece disponible
+mientras los workers esperan una respuesta de CoppeliaSim.
+
+El worker M4 resuelve el Vision Sensor durante el preflight y solicita su imagen
+RGB a 10~Hz, después de atender ESTOP, watchdog, colisiones y comandos. Una
+resolución o un buffer inválido se informa como indisponibilidad visual sin
+alterar el control. Un timeout RPC conserva la política de fallo cerrado.
 
 \subsection{Integración de los Módulos}
 \label{subsec:integracion_modulos}
 
-Los cinco módulos se integran en un ciclo de procesamiento en tiempo real:
+El ciclo integrado se ejecuta en el siguiente orden:
 
 \begin{enumerate}
-    \item Capturar y preprocesar el fotograma.
-    \item Detectar la pose corporal y los landmarks de la mano.
-    \item Validar la visibilidad de los puntos requeridos.
-    \item Calcular y suavizar los ángulos y la apertura del gripper.
-    \item Enviar los comandos al robot virtual cuando la imitación esté activa.
-    \item Actualizar la información mostrada en pantalla.
+    \item M1 captura el frame BGR y produce su versión RGB sin espejo.
+    \item M2 detecta la pose; Hands se activa cuando el estado es
+    \texttt{RUNNING}.
+    \item M3 valida cada canal, calcula las mediciones y construye el comando.
+    \item El hilo principal publica el comando mediante \texttt{submit};
+    únicamente el worker puede comunicarse con CoppeliaSim.
+    \item M4 sustituye el comando pendiente, lo vuelve a validar, comprueba
+    colisiones y transmite los canales aceptados.
+    \item El runtime M5 dibuja el skeleton, refleja la imagen final y publica
+          un snapshot latest-only para la GUI.
+    \item Tkinter compone ambas vistas, las tarjetas y los controles sin RPC.
+    \item Los botones y el teclado publican acciones no bloqueantes.
 \end{enumerate}
 
-% TODO: Insertar un diagrama de secuencia o un diagrama de flujo del programa.
+\begin{figure}[H]
+    \centering
+    \fbox{
+        \begin{minipage}{0.92\textwidth}
+            \centering
+            Cámara $\rightarrow$ M1 $\rightarrow$ M2 $\rightarrow$ M3
+            $\rightarrow$ \texttt{submit}\\[0.4em]
+            \texttt{submit} $\rightarrow$ cola \textit{latest-only}
+            $\rightarrow$ worker M4 $\rightarrow$ CoppeliaSim\\[0.4em]
+            worker M4 $\rightarrow$ \texttt{SafetySnapshot} + frame del sensor
+            $\rightarrow$ dashboard M5 $\rightarrow$ usuario
+        \end{minipage}
+    }
+    \caption{Flujo de datos y separación entre el hilo de cámara y el worker.}
+    \label{fig:flujo_integracion}
+\end{figure}
 
 % ============================================================
 \section{Plan de Pruebas}
 \label{sec:plan_pruebas}
 % ============================================================
 
-El sistema se evaluará mediante pruebas funcionales y experimentales. Para cada
-prueba se registrarán las condiciones de ejecución, los resultados esperados y
-los valores obtenidos. Una vez ejecutadas todas las pruebas, esta redacción se
-actualizará a tiempo pasado y se incorporarán los resultados reales.
+La estrategia separa las pruebas automatizadas, que deben ser deterministas,
+de la campaña experimental con cámara, que requiere registrar iluminación,
+distancia, fondo y velocidad del movimiento. Esta distinción evita mezclar la
+corrección del software con métricas que dependen del entorno físico.
 
-\subsection{Pruebas Funcionales}
+\subsection{Pruebas Automatizadas y Funcionales}
 \label{subsec:pruebas_funcionales}
 
 \begin{table}[H]
     \centering
-    \renewcommand{\arraystretch}{1.25}
+    \renewcommand{\arraystretch}{1.2}
     \small
     \begin{tabularx}{\textwidth}{
-        >{\raggedright\arraybackslash}p{2.5cm}
+        >{\raggedright\arraybackslash}p{2.6cm}
         >{\raggedright\arraybackslash}X
         >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{2cm}}
+        >{\raggedright\arraybackslash}p{2.2cm}}
         \toprule
         \textbf{Prueba} & \textbf{Resultado esperado} &
-        \textbf{Resultado obtenido} & \textbf{Estado} \\
+        \textbf{Evidencia disponible} & \textbf{Estado} \\
         \midrule
-        Captura de video & Mostrar video continuo desde la cámara. & TODO & TODO \\
-        Detección de pose & Identificar los landmarks del brazo derecho. & TODO & TODO \\
-        Cálculo angular & Obtener ángulos válidos de hombro y codo. & TODO & TODO \\
-        Control del UR5 & Reproducir el movimiento detectado. & TODO & TODO \\
-        Control del RG2 & Abrir y cerrar según el gesto de la mano. & TODO & TODO \\
-        Pérdida de conexión & Mantener activo el procesamiento de cámara. & TODO & TODO \\
+        Captura de video &
+        Producir frames BGR y RGB continuos. &
+        Inicialización, conversión y manejo de tres fallos implementados; falta
+        una ejecución instrumentada con cámara. &
+        Pendiente experimental \\
+        Detección de pose &
+        Usar 12/14/16 y asociar la mano derecha. &
+        Siete pruebas con landmarks sintéticos, dos manos, muñeca invisible y
+        asociaciones lejanas. &
+        Aprobada en unidad \\
+        Cálculo angular &
+        Obtener valores finitos sin contaminar el suavizado. &
+        Ocho pruebas de comandos tipados, puntos coincidentes, no finitos y
+        pérdida independiente de canales. &
+        Aprobada en unidad \\
+        Control UR5/RG2 &
+        Superar preflight y aceptar un lote válido. &
+        Prueba real en CoppeliaSim con objetivo de $-30^\circ$ para hombro y
+        codo y orden de apertura del RG2. &
+        Aprobada en integración \\
+        Pérdida de conexión &
+        Mantener responsivos \texttt{submit}, HUD y \texttt{E}. &
+        RPC bloqueada simulada, timeout operativo y ESTOP concurrente. &
+        Aprobada en unidad \\
+        Colisión externa &
+        Detener la simulación antes de nuevos objetivos y mostrar aliases. &
+        Obstáculo temporal en CoppeliaSim y pruebas antes/después de lote y
+        durante \textit{home}. &
+        Aprobada \\
         \bottomrule
     \end{tabularx}
-    \caption{Pruebas funcionales del sistema.}
+    \caption{Plan y estado de las pruebas funcionales.}
     \label{tab:pruebas_funcionales}
 \end{table}
 
-\subsection{Escenarios Experimentales}
+\subsection{Escenarios Experimentales Pendientes}
 \label{subsec:escenarios_experimentales}
+
+Para producir métricas comparables se propone grabar secuencias de 30 s,
+mantener fija la resolución y repetir cada condición cinco veces.
 
 \begin{table}[H]
     \centering
-    \renewcommand{\arraystretch}{1.25}
+    \renewcommand{\arraystretch}{1.2}
     \small
     \begin{tabularx}{\textwidth}{
         >{\raggedright\arraybackslash}p{1.8cm}
         >{\raggedright\arraybackslash}X
         >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{2.5cm}}
+        >{\raggedright\arraybackslash}p{2.7cm}}
         \toprule
         \textbf{Escenario} & \textbf{Condición} & \textbf{Propósito} &
-        \textbf{Repeticiones} \\
+        \textbf{Repeticiones previstas} \\
         \midrule
-        E1 & Iluminación alta, media y baja. & Evaluar sensibilidad a la iluminación. & TODO \\
-        E2 & Fondo simple y fondo complejo. & Evaluar estabilidad de la detección. & TODO \\
-        E3 & Movimiento lento, normal y rápido. & Evaluar seguimiento dinámico. & TODO \\
-        E4 & Brazo visible y parcialmente ocluido. & Evaluar robustez ante oclusiones. & TODO \\
-        E5 & Diferentes distancias a la cámara. & Determinar el rango de funcionamiento. & TODO \\
+        E1 & Iluminación alta, media y baja. &
+        Medir la sensibilidad de Pose y Hands. & 5 por nivel \\
+        E2 & Fondo simple y fondo complejo. &
+        Evaluar falsas asociaciones e inestabilidad. & 5 por fondo \\
+        E3 & Movimiento lento, normal y rápido. &
+        Evaluar seguimiento, suavizado y descarte de comandos antiguos. &
+        5 por velocidad \\
+        E4 & Brazo visible y parcialmente ocluido. &
+        Medir hold, recuperación y watchdog. & 5 por condición \\
+        E5 & Distancia corta, media y larga a la cámara. &
+        Evaluar el umbral de 5 px y la apertura basada en píxeles. &
+        5 por distancia \\
         \bottomrule
     \end{tabularx}
-    \caption{Escenarios considerados en la evaluación experimental.}
+    \caption{Campaña experimental propuesta.}
     \label{tab:escenarios_experimentales}
 \end{table}
 
 \subsection{Métricas de Evaluación}
 \label{subsec:metricas_evaluacion}
 
-Las métricas consideradas para evaluar el sistema son:
+Las métricas definidas para la campaña son:
 
 \begin{itemize}
-    \item FPS promedio, mínimo y desviación estándar.
-    \item Latencia aproximada entre la captura y la respuesta del simulador.
-    \item Porcentaje de fotogramas con detección válida.
-    \item Error absoluto medio de los ángulos del hombro y del codo.
-    \item Error de estimación de la apertura del gripper.
-    \item Tasa de éxito de los comandos enviados a CoppeliaSim.
+    \item FPS promedio, mínimo y desviación estándar;
+    \item latencia desde la creación del comando hasta el fin del lote remoto;
+    \item porcentaje de frames con brazo y mano válidos;
+    \item MAE de hombro y codo respecto de una referencia independiente;
+    \item error de apertura respecto de distancias de mano calibradas;
+    \item porcentaje de comandos aceptados, caducados y rechazados por canal; y
+    \item tiempo entre la detección de una colisión y la confirmación del ESTOP.
 \end{itemize}
 
-El error absoluto medio (MAE) angular se calcula como:
+El error absoluto medio angular se define como:
 
 \begin{equation}
     \mathrm{MAE} = \frac{1}{n}\sum_{i=1}^{n}
@@ -276,97 +577,223 @@ El error absoluto medio (MAE) angular se calcula como:
     \label{eq:mae_angular}
 \end{equation}
 
-% TODO: Explicar cómo se obtuvieron los valores angulares de referencia.
+La referencia angular no debe obtenerse del mismo resultado de MediaPipe. Para
+una medición válida se requiere un goniómetro, una anotación manual calibrada o
+un conjunto sintético de coordenadas con ángulo conocido. Como esa referencia
+no se registró durante esta fase, no se reporta un MAE experimental.
 
 % ============================================================
 \section{Resultados}
 \label{sec:resultados}
 % ============================================================
 
-\subsection{Resultados Funcionales}
+\subsection{Resultados Automatizados}
 \label{subsec:resultados_funcionales}
 
-% TODO: Resumir los requerimientos cumplidos, las pruebas unitarias y las
-% pruebas de integración. Incluir evidencias visuales relevantes.
+La suite actual contiene 82 pruebas. Las categorías y sus resultados se
+presentan en la Tabla~\ref{tab:resultados_automatizados}.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabularx}{\textwidth}{X p{2.2cm} p{3cm}}
+        \toprule
+        \textbf{Área} & \textbf{Pruebas} & \textbf{Resultado} \\
+        \midrule
+        Validación central de configuración & 19 & 19 aprobadas \\
+        MediaPipe y asociación de mano & 7 & 7 aprobadas \\
+        Ángulos, gripper y suavizado & 8 & 8 aprobadas \\
+        Control, concurrencia, sensor y seguridad M4 & 39 & 39 aprobadas \\
+        Runtime y presentación M5 & 8 & 8 aprobadas \\
+        Punto de entrada & 1 & 1 aprobada \\
+        \midrule
+        \textbf{Total} & \textbf{82} & \textbf{82 aprobadas} \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resultados de la suite automatizada.}
+    \label{tab:resultados_automatizados}
+\end{table}
+
+La ejecución completa más reciente se realizó con \texttt{unittest} en
+Python 3.12.13 y obtuvo 82 de 82 pruebas aprobadas. Las dependencias visuales
+y remotas se sustituyeron por dobles en los casos unitarios, por lo que este
+resultado verifica contratos de software y no reemplaza una medición con
+cámara o simulador real. De forma separada, la pila declarada se verificó en
+un entorno limpio de Python 3.11.9 y la compilación de los módulos terminó sin
+errores.
+
+\subsection{Resultados de Integración con CoppeliaSim}
+\label{subsec:resultados_integracion}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \small
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}p{3.2cm}
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}p{2.2cm}}
+        \toprule
+        \textbf{Caso} & \textbf{Resultado observado} & \textbf{Estado} \\
+        \midrule
+        Preflight de escena &
+        Se validaron seis joints, RG2, intervalos, perfil dinámico y
+        colecciones; transición a \texttt{READY}. &
+        Aprobado \\
+        Lote brazo + gripper &
+        Un comando humano $(90^\circ,90^\circ)$ produjo objetivos
+        $(-30^\circ,-30^\circ)$ y apertura del RG2. &
+        Aprobado \\
+        Parada de usuario &
+        La transición \texttt{RUNNING}$\rightarrow$\texttt{ESTOP} detuvo la
+        simulación y descartó órdenes pendientes. &
+        Aprobado \\
+        Colisión externa &
+        Un cubo temporal colocado sobre una forma móvil produjo ESTOP y mostró
+        el par \texttt{/UR5/...} con \texttt{/SafetyProbeObstacle}. &
+        Aprobado \\
+        Autocolisión &
+        Las colecciones excluyen por construcción las formas internas del UR5
+        del conjunto de entorno. &
+        Fuera de alcance \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resultados de integración en CoppeliaSim 4.10.0.}
+    \label{tab:resultados_integracion}
+\end{table}
+
+Durante la integración se detectó que la escena original utilizaba el modo de
+posición dinámico clásico. El preflight lo rechazó correctamente. Después de
+activar el perfil de movimiento en los seis joints y guardar la escena, el
+controlador alcanzó \texttt{READY}. También se amplió el presupuesto global de
+conexión y preflight de 3 s a 10 s, manteniendo el timeout de las RPC operativas
+en 500 ms.
 
 \subsection{Rendimiento en Tiempo Real}
 \label{subsec:rendimiento_tiempo_real}
 
+La arquitectura satisface de forma estructural dos requisitos de rendimiento:
+el envío está limitado a 20 Hz y la cola conserva únicamente el comando más
+reciente. Las pruebas de concurrencia demostraron que \texttt{submit}, la
+lectura del snapshot y la tecla de emergencia no esperan a una RPC bloqueada.
+
+No se realizó una campaña instrumentada con la cámara física. Por ello, los
+campos de la Tabla~\ref{tab:resultados_rendimiento} se marcan como N/D
+(\textit{no disponible}); N/D no equivale a cero.
+
 \begin{table}[H]
     \centering
-    \renewcommand{\arraystretch}{1.25}
+    \renewcommand{\arraystretch}{1.2}
     \small
     \begin{tabularx}{\textwidth}{
         >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{2.4cm}
-        >{\raggedright\arraybackslash}p{2.4cm}
+        >{\raggedright\arraybackslash}p{2.2cm}
+        >{\raggedright\arraybackslash}p{2.2cm}
         >{\raggedright\arraybackslash}p{2.4cm}}
         \toprule
         \textbf{Escenario} & \textbf{FPS promedio} &
-        \textbf{FPS mínimo} & \textbf{Latencia (ms)} \\
+        \textbf{FPS mínimo} & \textbf{Latencia} \\
         \midrule
-        Iluminación alta & TODO & TODO & TODO \\
-        Iluminación media & TODO & TODO & TODO \\
-        Iluminación baja & TODO & TODO & TODO \\
-        Movimiento rápido & TODO & TODO & TODO \\
+        Iluminación alta & N/D & N/D & N/D \\
+        Iluminación media & N/D & N/D & N/D \\
+        Iluminación baja & N/D & N/D & N/D \\
+        Movimiento rápido & N/D & N/D & N/D \\
         \bottomrule
     \end{tabularx}
-    \caption{Resultados de rendimiento del sistema.}
+    \caption{Métricas que requieren la campaña experimental con cámara.}
     \label{tab:resultados_rendimiento}
 \end{table}
-
-% TODO: Incluir una gráfica de FPS y latencia a lo largo del tiempo.
 
 \subsection{Precisión Angular y Control del Robot}
 \label{subsec:precision_angular}
 
+Aunque no existe una referencia experimental para calcular MAE, el mapeo del
+controlador sí fue validado de manera determinista:
+
 \begin{table}[H]
     \centering
-    \renewcommand{\arraystretch}{1.25}
-    \small
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{ccc}
+        \toprule
+        \textbf{Ángulo humano} &
+        \textbf{Objetivo de hombro} &
+        \textbf{Objetivo de codo} \\
+        \midrule
+        $(30^\circ,120^\circ)$ & $-10^\circ$ & $-20^\circ$ \\
+        $(150^\circ,30^\circ)$ & $-50^\circ$ & $-50^\circ$ \\
+        $(0^\circ,180^\circ)$ & $0^\circ$ & $0^\circ$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Casos deterministas del mapeo humano--UR5.}
+    \label{tab:mapeo_determinista}
+\end{table}
+
+Los valores booleanos, no finitos y fuera de $[0^\circ,180^\circ]$ fueron
+rechazados. También se verificó que un error del gripper no bloquee un lote de
+brazo válido y que un error de hombro o codo rechace todo el lote coordinado.
+La apertura del gripper no se expresa en grados, por lo que se evalúa con una
+métrica y una referencia diferentes del MAE angular.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
     \begin{tabularx}{\textwidth}{
         >{\raggedright\arraybackslash}X
         >{\raggedright\arraybackslash}p{3cm}
         >{\raggedright\arraybackslash}p{3.4cm}}
         \toprule
-        \textbf{Variable} & \textbf{MAE} & \textbf{Desviación estándar} \\
+        \textbf{Variable} & \textbf{Métrica pendiente} &
+        \textbf{Referencia requerida} \\
         \midrule
-        Ángulo del hombro & TODO & TODO \\
-        Ángulo del codo & TODO & TODO \\
-        Apertura del gripper & TODO & TODO \\
+        Ángulo del hombro & MAE angular: N/D &
+        Goniómetro o anotación calibrada \\
+        Ángulo del codo & MAE angular: N/D &
+        Goniómetro o anotación calibrada \\
+        Apertura del gripper &
+        Error normalizado o exactitud binaria: \mbox{N/D} &
+        Distancia calibrada o clase abierta/cerrada \\
         \bottomrule
     \end{tabularx}
-    \caption{Resultados de precisión del sistema.}
+    \caption{Métricas de precisión pendientes y sus referencias independientes.}
     \label{tab:resultados_precision}
 \end{table}
-
-% TODO: Añadir gráficas que comparen los valores de referencia, los valores
-% estimados y los comandos enviados al robot.
 
 \subsection{Robustez ante Condiciones Variables}
 \label{subsec:resultados_robustez}
 
+Las condiciones visuales todavía no poseen porcentajes medidos. Sin embargo,
+la robustez lógica frente a entradas y estados anómalos sí cuenta con evidencia:
+
 \begin{table}[H]
     \centering
-    \renewcommand{\arraystretch}{1.25}
+    \renewcommand{\arraystretch}{1.2}
     \small
-    \begin{tabularx}{\textwidth}{
-        >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{3.5cm}
-        >{\raggedright\arraybackslash}p{3.5cm}}
+    \begin{tabularx}{\textwidth}{p{3.5cm} X p{2.6cm}}
         \toprule
-        \textbf{Condición} & \textbf{Detecciones válidas (\%)} &
-        \textbf{Observaciones} \\
+        \textbf{Condición} & \textbf{Evidencia} & \textbf{Resultado} \\
         \midrule
-        Iluminación alta & TODO & TODO \\
-        Iluminación media & TODO & TODO \\
-        Iluminación baja & TODO & TODO \\
-        Fondo complejo & TODO & TODO \\
-        Oclusión parcial & TODO & TODO \\
-        Movimiento rápido & TODO & TODO \\
+        Landmark invisible o no finito &
+        Se rechaza sin insertarlo en los buffers; se limpia solo el canal
+        afectado. & Aprobado \\
+        Segmentos coincidentes &
+        Una longitud menor de 5 px impide calcular el ángulo. & Aprobado \\
+        Dos manos o mano lejana &
+        Se elige la muñeca más próxima y se rechazan asociaciones mayores al
+        15\% de la diagonal. & Aprobado \\
+        Pérdida de pose &
+        Hold inmediato y ESTOP después de 750 ms sin brazo válido. & Aprobado \\
+        RPC bloqueada &
+        El teclado y el HUD permanecen responsivos; el worker entra en
+        \texttt{FAULT} si vence el timeout. & Aprobado \\
+        Comandos rápidos &
+        El comando pendiente anterior se sustituye por el más reciente. &
+        Aprobado \\
+        Iluminación, fondo y distancia &
+        Requieren secuencias reales de cámara y registro de detecciones. &
+        Pendiente \\
         \bottomrule
     \end{tabularx}
-    \caption{Resultados de robustez bajo diferentes condiciones.}
+    \caption{Evidencia de robustez disponible.}
     \label{tab:resultados_robustez}
 \end{table}
 
@@ -375,34 +802,85 @@ El error absoluto medio (MAE) angular se calcula como:
 \label{sec:discusion_resultados}
 % ============================================================
 
-En esta sección se interpretan los resultados y se contrastan con los
-requerimientos y objetivos definidos en los informes anteriores.
+Los resultados disponibles permiten afirmar que la arquitectura modular y las
+protecciones del simulador funcionan conforme al contrato implementado. En
+particular, la validación independiente evita que una mano temporalmente
+oculta interrumpa el brazo, y evita que una pose inválida produzca objetivos
+extremos. El lote de hombro y codo conserva coherencia a nivel de validación,
+aunque las dos RPC se ejecutan secuencialmente y no forman una transacción
+atómica dentro de la escena.
+
+La media móvil de cinco muestras reduce fluctuaciones frame a frame, pero
+introduce inercia temporal. El efecto cuantitativo depende de los FPS reales y
+debe medirse durante la campaña. De forma similar, ejecutar Hands cada dos
+frames disminuye la carga de cómputo a cambio de reutilizar temporalmente la
+última detección.
+
+El mapeo lineal comprime $180^\circ$ de movimiento humano en $60^\circ$ del
+robot. Esta decisión mantiene los objetivos dentro del intervalo configurado,
+pero no reproduce la cinemática completa del miembro superior. El UR5 y el
+brazo humano poseen estructuras y orientaciones distintas; en esta fase no se
+resuelve cinemática inversa ni se intenta conservar la pose cartesiana, a
+diferencia de trabajos de transferencia cinemática más completos
+~\cite{wang2020fast,han2024robust}.
+
+Frente al Informe \#2, la principal mejora es el paso de una visualización
+conceptual a una simulación controlada con estados verificables. El uso de una
+cámara monocular mantiene bajo el costo del sistema, en línea con propuestas
+de imitación visual con webcam~\cite{xuan2017vision}, pero limita la
+profundidad y la precisión de la orientación.
+
+Las incidencias encontradas durante el desarrollo fueron relevantes para el
+diseño final:
 
 \begin{itemize}
-    \item TODO: Explicar qué escenarios produjeron los mejores y peores resultados.
-    \item TODO: Analizar el efecto del suavizado sobre la estabilidad y la latencia.
-    \item TODO: Examinar el compromiso entre precisión y velocidad de procesamiento.
-    \item TODO: Analizar las diferencias cinemáticas entre el brazo humano y el UR5.
-    \item TODO: Comparar los resultados con los requerimientos del Informe \#2.
-    \item TODO: Comparar brevemente los resultados con las soluciones existentes.
-    \item TODO: Explicar resultados inesperados y posibles fuentes de error.
+    \item el uso inicial de 11/13/15 seleccionaba el brazo izquierdo cuando la
+    inferencia se realizaba sin espejo;
+    \item una muestra inválida podía contaminar el suavizado o dejar pendiente
+    un objetivo anterior;
+    \item el cliente ZeroMQ debía configurar por separado el presupuesto de
+    conexión y el timeout operativo;
+    \item la escena incluida necesitaba un perfil dinámico compatible para que
+    velocidad, aceleración y jerk fueran aplicables; y
+    \item consultar aliases después de detectar una colisión podía retrasar o
+    impedir la RPC de parada, por lo que se precargaron en el preflight.
 \end{itemize}
+
+No es posible identificar todavía las mejores o peores condiciones de
+iluminación, fondo o velocidad. Presentar esa comparación sin ejecutar los
+escenarios E1--E5 produciría conclusiones no respaldadas. El siguiente paso
+experimental debe registrar esas variables y completar las tablas de FPS,
+latencia, MAE y porcentaje de detecciones válidas.
 
 % ============================================================
 \section{Limitaciones de la Implementación}
 \label{sec:limitaciones_implementacion}
 % ============================================================
 
-Entre las principales limitaciones que deben considerarse al interpretar los
-resultados se encuentran:
-
 \begin{itemize}
-    \item El uso de una sola cámara RGB limita la estimación real de profundidad.
-    \item La detección puede verse afectada por iluminación deficiente y oclusiones.
-    \item La estructura cinemática del brazo humano difiere de la del robot UR5.
-    \item La evaluación se realiza sobre un robot simulado y no sobre hardware real.
-    \item TODO: Añadir las demás limitaciones identificadas durante las pruebas.
+    \item Una cámara RGB monocular no proporciona profundidad métrica; los
+    ángulos se estiman en el plano de imagen.
+    \item La iluminación, las oclusiones, la ropa y un fondo complejo pueden
+    reducir la estabilidad de Pose y Hands.
+    \item Los umbrales de apertura del gripper están expresados en píxeles y no
+    se normalizan por el tamaño aparente de la mano ni por la distancia a la
+    cámara.
+    \item Solo se mapean hombro y codo; no se controla la orientación de muñeca
+    ni la pose cartesiana completa del efector final.
+    \item La detección de colisiones es reactiva después del contacto. No existe
+    planificación de trayectorias ni predicción de colisiones.
+    \item Las autocolisiones se excluyen deliberadamente; solo se comparan las
+    formas móviles del UR5/RG2 con objetos externos al árbol \texttt{/UR5}.
+    \item Las RPC de hombro y codo se validan como lote, pero no se ejecutan
+    mediante una transacción atómica embebida en la escena.
+    \item El retorno a \textit{home} depende de que la comunicación, la
+    simulación y el readback permanezcan disponibles durante un máximo de 5 s.
+    \item No se midieron todavía FPS, latencia extremo a extremo, MAE angular
+    ni robustez cuantitativa con la cámara física.
+    \item Las protecciones se diseñaron exclusivamente para CoppeliaSim. El
+    software no es un sistema de seguridad certificado y no debe conectarse a
+    un robot real sin una arquitectura independiente para hardware.
 \end{itemize}
 
-% Las conclusiones generales, recomendaciones y trabajos futuros deben
-% desarrollarse en el Informe #4, no en este capítulo.
+% Las conclusiones generales, recomendaciones y trabajos futuros se
+% desarrollarán en el Informe #4.

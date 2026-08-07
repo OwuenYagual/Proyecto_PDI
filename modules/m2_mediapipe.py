@@ -1,46 +1,41 @@
+"""M2: extracción y asociación de landmarks de MediaPipe."""
+
+from __future__ import annotations
+
+import math
+from numbers import Real
+
 import cv2
 import mediapipe as mp
 import numpy as np
 
 from config.settings import (
+    HAND_MODEL_COMPLEXITY,
+    HAND_WRIST_MATCH_MAX_RATIO,
+    HANDS_PROCESS_INTERVAL,
     MIN_DETECTION_CONFIDENCE,
     MIN_TRACKING_CONFIDENCE,
-    VISIBILITY_THRESHOLD,
-    FRAME_WIDTH,
-    FRAME_HEIGHT,
     POSE_MODEL_COMPLEXITY,
-    HAND_MODEL_COMPLEXITY,
-    HANDS_PROCESS_INTERVAL,
+    VISIBILITY_THRESHOLD,
 )
 
-# Índices MediaPipe Pose
-SHOULDER   = 11
-ELBOW      = 13
-WRIST_POSE = 15   # muñeca según Pose (ancla de sincronización)
+# MediaPipe Pose: brazo derecho de la persona, sin invertir la inferencia.
+SHOULDER = 12
+ELBOW = 14
+WRIST_POSE = 16
 
-# Índices MediaPipe Hands
-WRIST_HAND = 0    # muñeca según Hands (ancla de sincronización)
-THUMB_TIP  = 4    # punta del pulgar
-INDEX_TIP  = 8    # punta del índice
+# MediaPipe Hands.
+WRIST_HAND = 0
+THUMB_TIP = 4
+INDEX_TIP = 8
 
 
 class PoseDetector:
-    """
-    Módulo M2: corre MediaPipe Pose y MediaPipe Hands
-    sobre el mismo frame y sincroniza sus landmarks usando la muñeca
-    como punto de referencia común.
+    """Detecta el brazo derecho y asocia la mano que pertenece a su muñeca."""
 
-    Retorna un diccionario con dos secciones:
-        "arm"  : landmarks del brazo en píxeles
-                 {SHOULDER: {...}, ELBOW: {...}, WRIST_POSE: {...}}
-        "hand" : landmarks de dedos sincronizados con Pose
-                 {WRIST_HAND: {...}, THUMB_TIP: {...}, INDEX_TIP: {...}}
-                 None si no se detectó ninguna mano.
-    """
-
-    def __init__(self):
-        self.mp_pose    = mp.solutions.pose
-        self.mp_hands   = mp.solutions.hands
+    def __init__(self) -> None:
+        self.mp_pose = mp.solutions.pose
+        self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
 
         self.pose = self.mp_pose.Pose(
@@ -51,171 +46,164 @@ class PoseDetector:
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
         )
-
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,              # solo una mano necesaria
+            max_num_hands=2,
             model_complexity=HAND_MODEL_COMPLEXITY,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
         )
-        self._cached_hand = None
+        self._cached_hands: list[dict] = []
         self._hands_initialized = False
         self._hands_frames_since_process = HANDS_PROCESS_INTERVAL
-
-    # Interfaz pública
 
     def process(
         self,
         rgb_frame: np.ndarray,
         process_hands: bool = True,
     ) -> dict | None:
-        """
-        Ejecuta Pose y Hands sobre el frame RGB y retorna los landmarks
-        fusionados y sincronizados.
+        """Procesa un frame RGB sin espejo y devuelve brazo y mano asociados.
 
-        Args:
-            rgb_frame: imagen RGB uint8 (H, W, 3).
-            process_hands: activa Hands; si es False solo procesa Pose.
-
-        Returns:
-            {
-              "arm": {
-                  SHOULDER:   {"x": px, "y": px, "visibility": float},
-                  ELBOW:      {"x": px, "y": px, "visibility": float},
-                  WRIST_POSE: {"x": px, "y": px, "visibility": float},
-              },
-              "hand": {
-                  WRIST_HAND: {"x": px, "y": px, "visibility": float},
-                  THUMB_TIP:  {"x": px, "y": px, "visibility": float},
-                  INDEX_TIP:  {"x": px, "y": px, "visibility": float},
-              } | None
-            }
-            None si no se detectó el brazo.
+        Las coordenadas se convierten usando el tamaño real del frame recibido,
+        no la resolución solicitada a la cámara.
         """
+        if rgb_frame.ndim < 2:
+            raise ValueError("El frame RGB no tiene dimensiones de imagen válidas.")
+        frame_height, frame_width = rgb_frame.shape[:2]
+        if frame_width <= 0 or frame_height <= 0:
+            raise ValueError("El frame RGB está vacío.")
+
+        was_writeable = rgb_frame.flags.writeable
         rgb_frame.flags.writeable = False
         try:
             pose_results = self.pose.process(rgb_frame)
-
-            # Sin pose no se necesita ejecutar el modelo adicional de manos.
             if not pose_results.pose_landmarks:
                 self._reset_hand_cache()
                 return None
 
-            arm_landmarks = self._extract_arm(pose_results.pose_landmarks)
-            hand_landmarks = self._process_hand_if_needed(
+            arm_landmarks = self._extract_arm(
+                pose_results.pose_landmarks,
+                frame_width,
+                frame_height,
+            )
+            hand_candidates = self._process_hands_if_needed(
                 rgb_frame,
                 enabled=process_hands,
+                frame_width=frame_width,
+                frame_height=frame_height,
             )
         finally:
-            rgb_frame.flags.writeable = True
+            rgb_frame.flags.writeable = was_writeable
 
-        # Sincronizar el resultado reutilizado de Hands con la muñeca actual.
+        hand_landmarks = self._select_nearest_hand(
+            arm_landmarks,
+            hand_candidates,
+            frame_width,
+            frame_height,
+        )
         if hand_landmarks is not None:
             hand_landmarks = self._sync_wrists(arm_landmarks, hand_landmarks)
 
-        return {
-            "arm":  arm_landmarks,
-            "hand": hand_landmarks,
-        }
+        return {"arm": arm_landmarks, "hand": hand_landmarks}
 
     def draw_skeleton(self, bgr_frame: np.ndarray, result: dict | None) -> np.ndarray:
-        """
-        Dibuja el skeleton del brazo (verde) y los landmarks de dedos
-        (naranja) sobre el frame BGR.
-
-        Args:
-            bgr_frame: frame BGR de entrada.
-            result   : diccionario retornado por process().
-
-        Returns:
-            Frame BGR con overlays dibujados.
-        """
-        if result is None:
+        """Dibuja solo landmarks finitos y suficientemente visibles."""
+        if not isinstance(result, dict):
             return bgr_frame
 
         frame = bgr_frame.copy()
-
-        # ── Brazo (verde) ─────────────────────────────────────────────
-        arm = result["arm"]
-        arm_connections = [
-            (SHOULDER, ELBOW),
-            (ELBOW,    WRIST_POSE),
-        ]
-        for start_idx, end_idx in arm_connections:
-            lm_s = arm[start_idx]
-            lm_e = arm[end_idx]
-            if (lm_s["visibility"] < VISIBILITY_THRESHOLD or
-                    lm_e["visibility"] < VISIBILITY_THRESHOLD):
-                continue
-            cv2.line(
-                frame,
-                (int(lm_s["x"]), int(lm_s["y"])),
-                (int(lm_e["x"]), int(lm_e["y"])),
-                (34, 197, 94), 2,
-            )
-        for idx, lm in arm.items():
-            if lm["visibility"] < VISIBILITY_THRESHOLD:
-                continue
-            cx, cy = int(lm["x"]), int(lm["y"])
-            cv2.circle(frame, (cx, cy), 5, (34, 197, 94), -1)
-            cv2.putText(
-                frame, str(idx),
-                (cx + 6, cy - 6),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                (34, 197, 94), 1, cv2.LINE_AA,
-            )
-
-        # ── Mano (naranja) ────────────────────────────────────────────
-        hand = result.get("hand")
-        if hand is not None:
-            # Línea pulgar-índice (representa la apertura del gripper)
-            lm_thumb = hand[THUMB_TIP]
-            lm_index = hand[INDEX_TIP]
-            cv2.line(
-                frame,
-                (int(lm_thumb["x"]), int(lm_thumb["y"])),
-                (int(lm_index["x"]), int(lm_index["y"])),
-                (0, 165, 255), 2,
-            )
-            # Conexión muñeca → pulgar y muñeca → índice
-            lm_wrist = hand[WRIST_HAND]
-            for lm_tip in [lm_thumb, lm_index]:
+        arm = result.get("arm")
+        if isinstance(arm, dict):
+            for start_idx, end_idx in (
+                (SHOULDER, ELBOW),
+                (ELBOW, WRIST_POSE),
+            ):
+                lm_start = arm.get(start_idx)
+                lm_end = arm.get(end_idx)
+                if not (
+                    self._landmark_drawable(lm_start, require_visibility=True)
+                    and self._landmark_drawable(lm_end, require_visibility=True)
+                ):
+                    continue
                 cv2.line(
                     frame,
-                    (int(lm_wrist["x"]), int(lm_wrist["y"])),
-                    (int(lm_tip["x"]),   int(lm_tip["y"])),
-                    (0, 165, 255), 1,
+                    (int(lm_start["x"]), int(lm_start["y"])),
+                    (int(lm_end["x"]), int(lm_end["y"])),
+                    (34, 197, 94),
+                    2,
                 )
-            # Puntos de los dedos
-            for idx, lm in hand.items():
+
+            for idx in (SHOULDER, ELBOW, WRIST_POSE):
+                lm = arm.get(idx)
+                if not self._landmark_drawable(lm, require_visibility=True):
+                    continue
+                cx, cy = int(lm["x"]), int(lm["y"])
+                cv2.circle(frame, (cx, cy), 5, (34, 197, 94), -1)
+                cv2.putText(
+                    frame,
+                    str(idx),
+                    (cx + 6, cy - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (34, 197, 94),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+        hand = result.get("hand")
+        if isinstance(hand, dict) and all(
+            self._landmark_drawable(hand.get(idx))
+            for idx in (WRIST_HAND, THUMB_TIP, INDEX_TIP)
+        ):
+            wrist = hand[WRIST_HAND]
+            thumb = hand[THUMB_TIP]
+            index = hand[INDEX_TIP]
+            cv2.line(
+                frame,
+                (int(thumb["x"]), int(thumb["y"])),
+                (int(index["x"]), int(index["y"])),
+                (0, 165, 255),
+                2,
+            )
+            for tip in (thumb, index):
+                cv2.line(
+                    frame,
+                    (int(wrist["x"]), int(wrist["y"])),
+                    (int(tip["x"]), int(tip["y"])),
+                    (0, 165, 255),
+                    1,
+                )
+            labels = {WRIST_HAND: "W", THUMB_TIP: "4", INDEX_TIP: "8"}
+            for idx in (WRIST_HAND, THUMB_TIP, INDEX_TIP):
+                lm = hand[idx]
                 cx, cy = int(lm["x"]), int(lm["y"])
                 cv2.circle(frame, (cx, cy), 4, (0, 165, 255), -1)
-                label = {WRIST_HAND: "W", THUMB_TIP: "4", INDEX_TIP: "8"}
                 cv2.putText(
-                    frame, label[idx],
+                    frame,
+                    labels[idx],
                     (cx + 5, cy - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                    (0, 165, 255), 1, cv2.LINE_AA,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 165, 255),
+                    1,
+                    cv2.LINE_AA,
                 )
 
         return frame
 
     def is_arm_visible(self, result: dict | None) -> bool:
-        """True si hombro, codo y muñeca superan el umbral de visibilidad."""
-        if result is None:
+        """Indica si los tres landmarks del brazo son finitos y visibles."""
+        if not isinstance(result, dict) or not isinstance(result.get("arm"), dict):
             return False
         arm = result["arm"]
         return all(
-            arm[idx]["visibility"] >= VISIBILITY_THRESHOLD
-            for idx in [SHOULDER, ELBOW, WRIST_POSE]
+            self._landmark_drawable(arm.get(idx), require_visibility=True)
+            for idx in (SHOULDER, ELBOW, WRIST_POSE)
         )
 
     def release(self) -> None:
         self.pose.close()
         self.hands.close()
-
-    # Context manager
 
     def __enter__(self):
         return self
@@ -224,16 +212,16 @@ class PoseDetector:
         self.release()
         return False
 
-    # Métodos privados
-
-    def _process_hand_if_needed(
+    def _process_hands_if_needed(
         self,
         rgb_frame: np.ndarray,
         enabled: bool,
-    ) -> dict | None:
+        frame_width: int,
+        frame_height: int,
+    ) -> list[dict]:
         if not enabled:
             self._reset_hand_cache()
-            return None
+            return []
 
         self._hands_frames_since_process += 1
         should_process = (
@@ -242,83 +230,132 @@ class PoseDetector:
         )
         if should_process:
             hands_results = self.hands.process(rgb_frame)
-            self._cached_hand = self._extract_hand(hands_results)
+            self._cached_hands = self._extract_hands(
+                hands_results,
+                frame_width,
+                frame_height,
+            )
             self._hands_initialized = True
             self._hands_frames_since_process = 0
 
-        return self._cached_hand
+        return self._cached_hands
 
     def _reset_hand_cache(self) -> None:
-        self._cached_hand = None
+        self._cached_hands = []
         self._hands_initialized = False
         self._hands_frames_since_process = HANDS_PROCESS_INTERVAL
 
-    def _extract_arm(self, pose_landmarks) -> dict:
-        """
-        Extrae hombro, codo y muñeca de Pose y los convierte a píxeles.
-        """
+    @staticmethod
+    def _extract_arm(
+        pose_landmarks,
+        frame_width: int,
+        frame_height: int,
+    ) -> dict:
         extracted = {}
-        for idx in [SHOULDER, ELBOW, WRIST_POSE]:
-            lm = pose_landmarks.landmark[idx]
+        for idx in (SHOULDER, ELBOW, WRIST_POSE):
+            landmark = pose_landmarks.landmark[idx]
             extracted[idx] = {
-                "x":          lm.x * FRAME_WIDTH,
-                "y":          lm.y * FRAME_HEIGHT,
-                "visibility": lm.visibility,
+                "x": landmark.x * frame_width,
+                "y": landmark.y * frame_height,
+                "visibility": landmark.visibility,
             }
         return extracted
 
-    def _extract_hand(self, hands_results) -> dict | None:
-        """
-        Extrae muñeca (0), pulgar (4) e índice (8) de Hands.
-        Retorna None si no hay detección de mano.
-        """
-        if not hands_results.multi_hand_landmarks:
+    @staticmethod
+    def _extract_hands(
+        hands_results,
+        frame_width: int,
+        frame_height: int,
+    ) -> list[dict]:
+        all_landmarks = getattr(hands_results, "multi_hand_landmarks", None)
+        if not all_landmarks:
+            return []
+
+        extracted_hands = []
+        for hand_landmarks in all_landmarks[:2]:
+            extracted = {}
+            for idx in (WRIST_HAND, THUMB_TIP, INDEX_TIP):
+                landmark = hand_landmarks.landmark[idx]
+                extracted[idx] = {
+                    "x": landmark.x * frame_width,
+                    "y": landmark.y * frame_height,
+                    "visibility": 1.0,
+                }
+            extracted_hands.append(extracted)
+        return extracted_hands
+
+    @classmethod
+    def _select_nearest_hand(
+        cls,
+        arm: dict,
+        candidates: list[dict],
+        frame_width: int,
+        frame_height: int,
+    ) -> dict | None:
+        pose_wrist = arm.get(WRIST_POSE) if isinstance(arm, dict) else None
+        if not cls._landmark_drawable(pose_wrist, require_visibility=True):
             return None
 
-        # Tomar la primera mano detectada
-        hand_lms = hands_results.multi_hand_landmarks[0]
+        nearest = None
+        nearest_distance = math.inf
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            hand_wrist = candidate.get(WRIST_HAND)
+            if not cls._landmark_drawable(hand_wrist):
+                continue
+            distance = math.hypot(
+                pose_wrist["x"] - hand_wrist["x"],
+                pose_wrist["y"] - hand_wrist["y"],
+            )
+            if distance < nearest_distance:
+                nearest = candidate
+                nearest_distance = distance
 
-        extracted = {}
-        for idx in [WRIST_HAND, THUMB_TIP, INDEX_TIP]:
-            lm = hand_lms.landmark[idx]
-            extracted[idx] = {
-                "x":          lm.x * FRAME_WIDTH,
-                "y":          lm.y * FRAME_HEIGHT,
-                "visibility": 1.0,   # Hands no provee visibility, asumimos 1.0
+        maximum_distance = HAND_WRIST_MATCH_MAX_RATIO * math.hypot(
+            frame_width,
+            frame_height,
+        )
+        if nearest is None or nearest_distance > maximum_distance:
+            return None
+        return nearest
+
+    @staticmethod
+    def _sync_wrists(arm: dict, hand: dict) -> dict:
+        pose_wrist = arm[WRIST_POSE]
+        hand_wrist = hand[WRIST_HAND]
+        offset_x = pose_wrist["x"] - hand_wrist["x"]
+        offset_y = pose_wrist["y"] - hand_wrist["y"]
+        return {
+            idx: {
+                "x": landmark["x"] + offset_x,
+                "y": landmark["y"] + offset_y,
+                "visibility": landmark["visibility"],
             }
-        return extracted
+            for idx, landmark in hand.items()
+        }
 
-    def _sync_wrists(self, arm: dict, hand: dict) -> dict:
-        """
-        Sincroniza los landmarks de Hands al espacio de coordenadas
-        de Pose usando la muñeca como ancla común.
-
-        Calcula el offset entre:
-            muñeca_pose (lm 15)  y  muñeca_hand (lm 0)
-        y lo aplica a todos los landmarks de la mano.
-
-        Args:
-            arm : landmarks del brazo en píxeles (de Pose).
-            hand: landmarks de la mano en píxeles (de Hands).
-
-        Returns:
-            Diccionario de landmarks de mano corregidos.
-        """
-        wrist_pose_x = arm[WRIST_POSE]["x"]
-        wrist_pose_y = arm[WRIST_POSE]["y"]
-
-        wrist_hand_x = hand[WRIST_HAND]["x"]
-        wrist_hand_y = hand[WRIST_HAND]["y"]
-
-        offset_x = wrist_pose_x - wrist_hand_x
-        offset_y = wrist_pose_y - wrist_hand_y
-
-        synced = {}
-        for idx, lm in hand.items():
-            synced[idx] = {
-                "x":          lm["x"] + offset_x,
-                "y":          lm["y"] + offset_y,
-                "visibility": lm["visibility"],
-            }
-
-        return synced
+    @staticmethod
+    def _landmark_drawable(
+        landmark: object,
+        require_visibility: bool = False,
+    ) -> bool:
+        if not isinstance(landmark, dict):
+            return False
+        values = (landmark.get("x"), landmark.get("y"))
+        if not all(
+            isinstance(value, Real)
+            and not isinstance(value, (bool, np.bool_))
+            and math.isfinite(float(value))
+            for value in values
+        ):
+            return False
+        if not require_visibility:
+            return True
+        visibility = landmark.get("visibility")
+        return (
+            isinstance(visibility, Real)
+            and not isinstance(visibility, (bool, np.bool_))
+            and math.isfinite(float(visibility))
+            and float(visibility) >= VISIBILITY_THRESHOLD
+        )

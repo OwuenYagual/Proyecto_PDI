@@ -58,7 +58,6 @@ resolución, conversión de espacio de color y reducción de ruido.
 
 \begin{table}[h!]
 \centering
-\label{tab:m1_io}
 \renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{
     >{\bfseries}p{3cm}
@@ -80,6 +79,7 @@ Salida &
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 1.}
+\label{tab:m1_io}
 \end{table}
 
 \paragraph{Herramientas Tecnológicas}
@@ -118,7 +118,6 @@ puntos clave del brazo: hombros (landmarks~11,~12), codos
 
 \begin{table}[h!]
 \centering
-\label{tab:m1_io}
 \renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{
     >{\bfseries}p{3cm}
@@ -142,6 +141,7 @@ Salida &
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 2.}
+\label{tab:m2_io}
 \end{table}
  
 \paragraph{Herramientas Tecnológicas}
@@ -187,7 +187,6 @@ articulares.
 
 \begin{table}[h!]
 \centering
-\label{tab:m1_io}
 \renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{
     >{\bfseries}p{3cm}
@@ -207,10 +206,11 @@ Entrada &
 Salida &
   Tripleta de ángulos articulares suavizados &
   $\theta_{\text{hombro}},\,\theta_{\text{codo}},\,
-   \theta_{\text{muñeca}}$ en grados $[0°,\,180°]$ (float64) \\
+   \theta_{\text{muñeca}}$ en grados $[0^\circ,\,180^\circ]$ (float64) \\
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 3.}
+\label{tab:m3_io}
 \end{table}
 
 \paragraph{Herramientas Tecnológicas}\mbox{}
@@ -261,7 +261,6 @@ tiempo real~\cite{Altayeb2023}.
 
 \begin{table}[h!]
 \centering
-\label{tab:m1_io}
 \renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{
     >{\bfseries}p{3cm}
@@ -285,6 +284,7 @@ Salida &
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 4.}
+\label{tab:m4_io}
 \end{table}
  
 \paragraph{Herramientas Tecnológicas}
@@ -341,7 +341,6 @@ brazo robótico virtual y las métricas de rendimiento del sistema
 
 \begin{table}[h!]
 \centering
-\label{tab:m1_io}
 \renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{
     >{\bfseries}p{3cm}
@@ -367,6 +366,7 @@ Salida &
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 5.}
+\label{tab:m5_io}
 \end{table}
  
 \paragraph{Herramientas Tecnológicas}
@@ -405,7 +405,7 @@ Hoy en día, replicar los movimientos del cuerpo humano mediante visión por com
 
 Una de las líneas de investigación con más fuerza es la teleoperación por imitación. Aquí el reto principal no es solo registrar el movimiento de los brazos o piernas del usuario, sino ver cómo adaptar esos datos a la estructura de un robot, cuyas articulaciones y límites físicos suelen ser muy diferentes a los de un humano.
 
-Por ejemplo, Zhang y su equipo diseñaron un sistema para conectar los movimientos de un brazo humano con un robot industrial. Lo interesante de su propuesta es que crearon un modelo cinemático capaz de traducir las trayectorias en tiempo real; el robot lograba replicar la orientación del brazo incluso teniendo una anatomía completamente distinta \cite{Wang2020Fast}. Esto demostró que la compatibilidad física no es una barrera insalvable. En una línea parecida, Xuan y Tang apostaron por la simplicidad del hardware al usar una sola cámara web común (óptica monocular) para controlar un brazo robótico \cite{xuan2017vision}. Su trabajo dejó claro que no hacen falta sensores pegados al cuerpo ni trajes especiales si se cuenta con un buen procesamiento visual.
+Por ejemplo, Zhang y su equipo diseñaron un sistema para conectar los movimientos de un brazo humano con un robot industrial. Lo interesante de su propuesta es que crearon un modelo cinemático capaz de traducir las trayectorias en tiempo real; el robot lograba replicar la orientación del brazo incluso teniendo una anatomía completamente distinta \cite{wang2020fast}. Esto demostró que la compatibilidad física no es una barrera insalvable. En una línea parecida, Xuan y Tang apostaron por la simplicidad del hardware al usar una sola cámara web común (óptica monocular) para controlar un brazo robótico \cite{xuan2017vision}. Su trabajo dejó claro que no hacen falta sensores pegados al cuerpo ni trajes especiales si se cuenta con un buen procesamiento visual.
 
 Por otro lado, cuando se trabaja con robots humanoides, la complejidad aumenta. En otro estudio, Han et al. se enfocaron en este problema desarrollando un método para rastrear específicamente el codo y la muñeca del operario. Su sistema ajusta esas coordenadas sobre la marcha para que el robot aprenda tareas de manipulación sin perder el equilibrio ni la fluidez \cite{han2024robust}. Más recientemente, un estudio de la Universidad de los Andes (2026) propuso usar cámaras RGB-D (que miden profundidad) junto con algoritmos de estimación de pose. Su investigación confirmó que la visión artificial actual es lo suficientemente madura como para interactuar con gemelos virtuales y robots físicos con una precisión bastante aceptable, dejando atrás los incómodos sensores portables \cite{alibeigi2017inverse}.
 
