@@ -75,13 +75,11 @@ class AngleCalculator:
             return None, error
 
         # ``_validate_arm`` garantiza la estructura de estos landmarks.
-        raw_shoulder = self._angle_between(  # type: ignore[index]
-            arm[SHOULDER],  # type: ignore[index]
+        raw_shoulder = self._signed_shoulder_elevation(  # type: ignore[index]
             arm[SHOULDER],  # type: ignore[index]
             arm[ELBOW],  # type: ignore[index]
-            reference="vertical",
         )
-        raw_elbow = self._angle_between(  # type: ignore[index]
+        raw_elbow = self._elbow_angle(  # type: ignore[index]
             arm[SHOULDER],  # type: ignore[index]
             arm[ELBOW],  # type: ignore[index]
             arm[WRIST_POSE],  # type: ignore[index]
@@ -90,7 +88,10 @@ class AngleCalculator:
             self._clear_arm_buffers()
             return None, "arm_angle_non_finite"
 
-        shoulder = round(self._smooth(self.JOINT_SHOULDER, raw_shoulder), 2)
+        shoulder = round(
+            self._smooth_circular(self.JOINT_SHOULDER, raw_shoulder),
+            2,
+        )
         elbow = round(self._smooth(self.JOINT_ELBOW, raw_elbow), 2)
         return ArmCommand(shoulder_deg=shoulder, elbow_deg=elbow), None
 
@@ -120,18 +121,14 @@ class AngleCalculator:
         p_proximal: dict,
         p_central: dict,
         p_distal: dict,
-        reference: str | None = None,
     ) -> float:
         """Calcula el ángulo entre dos vectores en grados."""
         center_x = float(p_central["x"])
         center_y = float(p_central["y"])
-        if reference == "vertical":
-            vector_one = (0.0, -1.0)
-        else:
-            vector_one = (
-                float(p_proximal["x"]) - center_x,
-                float(p_proximal["y"]) - center_y,
-            )
+        vector_one = (
+            float(p_proximal["x"]) - center_x,
+            float(p_proximal["y"]) - center_y,
+        )
         vector_two = (
             float(p_distal["x"]) - center_x,
             float(p_distal["y"]) - center_y,
@@ -146,10 +143,50 @@ class AngleCalculator:
         cosine = min(1.0, max(-1.0, cosine))
         return math.degrees(math.acos(cosine))
 
+    @staticmethod
+    def _signed_shoulder_elevation(shoulder: dict, elbow: dict) -> float:
+        """Ángulo firmado desde abajo, coherente con la vista espejada del HUD."""
+        display_dx = float(shoulder["x"]) - float(elbow["x"])
+        down_dy = float(elbow["y"]) - float(shoulder["y"])
+        if display_dx == 0.0 and down_dy == 0.0:
+            return math.nan
+        return math.degrees(math.atan2(display_dx, down_dy))
+
+    @classmethod
+    def _elbow_angle(cls, shoulder: dict, elbow: dict, wrist: dict) -> float:
+        """Prefiere MediaPipe World para evitar distorsión por profundidad."""
+        world_keys = ("world_x", "world_y", "world_z")
+        if all(
+            all(cls._is_finite_real(point.get(key)) for key in world_keys)
+            for point in (shoulder, elbow, wrist)
+        ):
+            proximal = tuple(
+                float(shoulder[key]) - float(elbow[key]) for key in world_keys
+            )
+            distal = tuple(
+                float(wrist[key]) - float(elbow[key]) for key in world_keys
+            )
+            norm_proximal = math.sqrt(sum(value * value for value in proximal))
+            norm_distal = math.sqrt(sum(value * value for value in distal))
+            if norm_proximal == 0.0 or norm_distal == 0.0:
+                return math.nan
+            cosine = sum(
+                first * second for first, second in zip(proximal, distal)
+            ) / (norm_proximal * norm_distal)
+            return math.degrees(math.acos(min(1.0, max(-1.0, cosine))))
+        return cls._angle_between(shoulder, elbow, wrist)
+
     def _smooth(self, joint: str, value: float) -> float:
         buffer = self._buffers[joint]
         buffer.append(value)
         return sum(buffer) / len(buffer)
+
+    def _smooth_circular(self, joint: str, value: float) -> float:
+        buffer = self._buffers[joint]
+        buffer.append(value)
+        sine = sum(math.sin(math.radians(sample)) for sample in buffer)
+        cosine = sum(math.cos(math.radians(sample)) for sample in buffer)
+        return math.degrees(math.atan2(sine, cosine))
 
     def _clear_arm_buffers(self) -> None:
         self._buffers[self.JOINT_SHOULDER].clear()

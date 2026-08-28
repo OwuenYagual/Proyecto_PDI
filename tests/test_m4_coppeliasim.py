@@ -10,6 +10,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+
+try:
+    import zmq as _zmq  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["zmq"] = SimpleNamespace(RCVTIMEO=1, SNDTIMEO=2, LINGER=3)
+
 from config import settings
 from modules.commands import ArmCommand, GripperCommand, MimicCommand
 from modules.m4_coppeliasim import CoppeliaRobot, SafetyState
@@ -110,6 +116,10 @@ class FakeSim:
         self.vision_image = bytes(range(12))
         self.vision_calls = 0
         self.fail_vision_lookup = False
+        self.orientations = {self.UR5: [0.0, 0.0, 0.0]}
+        self.orientation_commands: list[tuple[int, int, list[float]]] = []
+        self.matrix_commands: list[tuple[int, int, list[float]]] = []
+        self.float_property_commands: list[tuple[int, str, float]] = []
 
         self.hold_event = threading.Event()
         self.signal_event = threading.Event()
@@ -152,6 +162,30 @@ class FakeSim:
             raise RuntimeError("Vision Sensor invalido")
         self.vision_calls += 1
         return self.vision_image, self.vision_resolution
+
+    def getObjectOrientation(self, handle: int, relative_to: int) -> list[float]:
+        del relative_to
+        return list(self.orientations[handle])
+
+    def setObjectOrientation(
+        self,
+        handle: int,
+        relative_to: int,
+        orientation: list[float],
+    ) -> None:
+        self.orientation_commands.append((handle, relative_to, list(orientation)))
+        self.orientations[handle] = list(orientation)
+
+    def setObjectMatrix(
+        self,
+        handle: int,
+        relative_to: int,
+        matrix: list[float],
+    ) -> None:
+        self.matrix_commands.append((handle, relative_to, list(matrix)))
+
+    def setFloatProperty(self, handle: int, name: str, value: float) -> None:
+        self.float_property_commands.append((handle, name, value))
 
     def getObjectsInTree(self, base: int, object_type: int, options: int = 0) -> list[int]:
         del options
@@ -347,14 +381,61 @@ class CoppeliaRobotTests(unittest.TestCase):
 
     def test_map_arm_angles_preserves_expected_mapping(self) -> None:
         cases = (
-            ((30.0, 120.0), (-10.0, -20.0)),
-            ((150.0, 30.0), (-50.0, -50.0)),
-            ((220.0, -20.0), (-60.0, -60.0)),
-            ((0.0, 180.0), (0.0, 0.0)),
+            ((30.0, 120.0), (45.0, 60.0)),
+            ((90.0, 90.0), (0.0, 90.0)),
+            ((150.0, 150.0), (-45.0, 30.0)),
+            ((180.0, 180.0), (-75.0, 0.0)),
         )
         for inputs, expected in cases:
             with self.subTest(inputs=inputs):
                 self.assertEqual(CoppeliaRobot.map_arm_angles(*inputs), expected)
+
+    def test_horizontal_shoulder_tolerance_keeps_robot_vertical(self) -> None:
+        shoulder, elbow = CoppeliaRobot.map_arm_angles(78.3, 125.4)
+
+        self.assertEqual(shoulder, 0.0)
+        self.assertAlmostEqual(elbow, 54.6)
+
+    def test_preflight_rotates_the_complete_model_base(self) -> None:
+        self.assertTrue(self.robot.connect())
+
+        self.assertEqual(len(self.sim.orientation_commands), 1)
+        handle, relative_to, orientation = self.sim.orientation_commands[0]
+        self.assertEqual(handle, self.sim.UR5)
+        self.assertEqual(relative_to, -1)
+        self.assertEqual(orientation, [0.0, 0.0, math.radians(90.0)])
+
+    def test_preflight_uses_front_dominant_oblique_view(self) -> None:
+        self.sim.vision_available = True
+
+        self.assertTrue(self.robot.connect())
+
+        self.assertEqual(len(self.sim.matrix_commands), 1)
+        handle, relative_to, matrix = self.sim.matrix_commands[0]
+        self.assertEqual(handle, self.sim.VISION_SENSOR)
+        self.assertEqual(relative_to, self.sim.UR5)
+        camera = settings.COPPELIASIM_VIEW_CAMERA_POSITION
+        target = settings.COPPELIASIM_VIEW_TARGET_POSITION
+        self.assertEqual((matrix[3], matrix[7], matrix[11]), camera)
+        forward = tuple(target[i] - camera[i] for i in range(3))
+        self.assertGreater(abs(forward[0]), 1.0)
+        self.assertGreater(abs(forward[1]), 1.0)
+        # X domina para ver el gripper casi de frente; Y conserva profundidad
+        # lateral suficiente para leer la flexion del antebrazo.
+        self.assertLess(abs(forward[0] / forward[1]), 2.0)
+        self.assertGreater(abs(forward[0] / forward[1]), 1.3)
+        forward_norm = math.sqrt(sum(value * value for value in forward))
+        for actual, expected in zip(
+            (matrix[2], matrix[6], matrix[10]),
+            (value / forward_norm for value in forward),
+        ):
+            self.assertAlmostEqual(actual, expected)
+        self.assertGreater(matrix[9], 0.0)
+        self.assertEqual(len(self.sim.float_property_commands), 1)
+        zoom_handle, property_name, value = self.sim.float_property_commands[0]
+        self.assertEqual(zoom_handle, self.sim.VISION_SENSOR)
+        self.assertEqual(property_name, "viewAngle")
+        self.assertAlmostEqual(value, math.radians(50.0))
 
     def test_sub_hz_frequencies_are_respected_without_clamping(self) -> None:
         with patch.object(settings, "COPPELIASIM_UPDATE_HZ", 0.5), patch.object(
@@ -471,7 +552,7 @@ class CoppeliaRobotTests(unittest.TestCase):
     def test_preflight_rejects_empty_effective_interval(self) -> None:
         self.sim.intervals[self.sim.JOINTS[1]] = (
             False,
-            [math.radians(10.0), math.radians(20.0)],
+            [math.radians(120.0), math.radians(20.0)],
         )
 
         self.assertFalse(self.robot.connect())
@@ -534,7 +615,15 @@ class CoppeliaRobotTests(unittest.TestCase):
                 "fuera",
             ),
             (
-                MimicCommand(4, self.clock(), gripper=GripperCommand(math.inf)),
+                MimicCommand(4, self.clock(), ArmCommand(-181.0, 90.0)),
+                "fuera",
+            ),
+            (
+                MimicCommand(5, self.clock(), ArmCommand(0.0, -1.0)),
+                "fuera",
+            ),
+            (
+                MimicCommand(6, self.clock(), gripper=GripperCommand(math.inf)),
                 "no finita",
             ),
         )
@@ -545,7 +634,7 @@ class CoppeliaRobotTests(unittest.TestCase):
                 self.assertIn(reason_fragment, reasons)
 
         self.clock.advance(1.0)
-        stale = MimicCommand(5, self.clock() - 1.0, ArmCommand(30.0, 120.0))
+        stale = MimicCommand(7, self.clock() - 1.0, ArmCommand(30.0, 120.0))
         report = self.robot.submit(stale)
         self.assertFalse(report.arm.accepted)
         self.assertFalse(report.gripper.accepted)
@@ -600,7 +689,7 @@ class CoppeliaRobotTests(unittest.TestCase):
         self.assertTrue(self.sim.stop_event.wait(1.0))
         self.assertFalse(self.sim.last_stop_wait)
         self.assertNotIn(
-            (self.sim.JOINTS[2], math.radians(-20.0)),
+            (self.sim.JOINTS[2], math.radians(60.0)),
             [(handle, target) for handle, target, _ in self.sim.joint_commands],
         )
         self.robot.emergency_stop("segunda pulsación")
@@ -621,7 +710,7 @@ class CoppeliaRobotTests(unittest.TestCase):
             for handle, target, _ in self.sim.joint_commands
             if handle == self.sim.JOINTS[2]
         ]
-        self.assertNotIn(math.radians(-20.0), elbow_targets)
+        self.assertNotIn(math.radians(60.0), elbow_targets)
         self.assertEqual(self.robot.snapshot.state, SafetyState.PAUSED)
 
     def test_invalid_arm_cancels_an_inflight_older_arm_batch(self) -> None:
@@ -644,7 +733,7 @@ class CoppeliaRobotTests(unittest.TestCase):
             for handle, target, _ in self.sim.joint_commands
             if handle == self.sim.JOINTS[2]
         ]
-        self.assertNotIn(math.radians(-20.0), elbow_targets)
+        self.assertNotIn(math.radians(60.0), elbow_targets)
 
     def test_fully_invalid_sample_removes_an_older_pending_command(self) -> None:
         self.connect_and_start()
@@ -681,9 +770,9 @@ class CoppeliaRobotTests(unittest.TestCase):
             for handle, target, _ in self.sim.joint_commands
             if handle == self.sim.JOINTS[1]
         ]
-        self.assertIn(math.radians(-10.0), shoulder_targets)
-        self.assertIn(math.radians(-40.0), shoulder_targets)
-        self.assertNotIn(math.radians(-20.0), shoulder_targets)
+        self.assertIn(math.radians(45.0), shoulder_targets)
+        self.assertIn(math.radians(-15.0), shoulder_targets)
+        self.assertNotIn(math.radians(15.0), shoulder_targets)
 
     def test_collision_latches_estop_and_records_aliases(self) -> None:
         self.connect_and_start()

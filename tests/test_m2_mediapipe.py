@@ -1,10 +1,22 @@
 """Pruebas unitarias de M2 sin inicializar modelos de MediaPipe."""
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
+
+
+try:
+    import cv2 as _cv2  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["cv2"] = ModuleType("cv2")
+
+try:
+    import mediapipe as _mediapipe  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["mediapipe"] = ModuleType("mediapipe")
 
 from modules.m2_mediapipe import (
     ELBOW,
@@ -21,13 +33,22 @@ def _landmark(x: float, y: float, visibility: float = 1.0) -> SimpleNamespace:
     return SimpleNamespace(x=x, y=y, visibility=visibility)
 
 
+def _world_landmark(x: float, y: float, z: float) -> SimpleNamespace:
+    return SimpleNamespace(x=x, y=y, z=z)
+
+
 def _pose_result() -> SimpleNamespace:
     landmarks = [_landmark(0.0, 0.0) for _ in range(17)]
+    world_landmarks = [_world_landmark(0.0, 0.0, 0.0) for _ in range(17)]
     landmarks[SHOULDER] = _landmark(0.25, 0.20)
     landmarks[ELBOW] = _landmark(0.50, 0.30)
     landmarks[WRIST_POSE] = _landmark(0.80, 0.40)
+    world_landmarks[SHOULDER] = _world_landmark(-0.25, -0.10, 0.05)
+    world_landmarks[ELBOW] = _world_landmark(0.0, 0.0, 0.0)
+    world_landmarks[WRIST_POSE] = _world_landmark(0.30, 0.10, -0.08)
     return SimpleNamespace(
         pose_landmarks=SimpleNamespace(landmark=landmarks),
+        pose_world_landmarks=SimpleNamespace(landmark=world_landmarks),
     )
 
 
@@ -91,6 +112,8 @@ class PoseDetectorTests(unittest.TestCase):
 
         self.assertEqual(result["arm"][SHOULDER]["x"], 50.0)
         self.assertEqual(result["arm"][SHOULDER]["y"], 20.0)
+        self.assertEqual(result["arm"][SHOULDER]["world_x"], -0.25)
+        self.assertEqual(result["arm"][WRIST_POSE]["world_z"], -0.08)
         self.assertEqual(result["arm"][WRIST_POSE]["x"], 160.0)
         self.assertEqual(result["hand"][WRIST_HAND]["x"], 160.0)
         # El offset relativo de 0.04 sobre un frame de 200 px identifica la

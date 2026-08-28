@@ -21,7 +21,13 @@ try:
 except ModuleNotFoundError:
     sys.modules["mediapipe"] = ModuleType("mediapipe")
 
-from modules.commands import ArmCommand, GripperCommand, MimicCommand
+from modules.commands import (
+    ArmCommand,
+    ChannelValidation,
+    GripperCommand,
+    MimicCommand,
+    ValidationReport,
+)
 from modules.m4_coppeliasim import SafetySnapshot, SafetyState, SimulatorFrameSnapshot
 from modules.m5_gui import (
     CameraFrameSnapshot,
@@ -52,6 +58,7 @@ def runtime_snapshot(
     camera_available: bool = True,
     camera_fatal: bool = False,
     command: MimicCommand | None = None,
+    report: ValidationReport | None = None,
 ) -> RuntimeSnapshot:
     return RuntimeSnapshot(
         safety=safety(state),
@@ -61,7 +68,7 @@ def runtime_snapshot(
         camera_fatal=camera_fatal,
         fps=29.5,
         command=command,
-        report=None,
+        report=report,
         message="estado",
     )
 
@@ -100,9 +107,38 @@ class PresentationTests(unittest.TestCase):
             gripper=GripperCommand(0.61),
         )
 
+        report = ValidationReport(
+            arm=ChannelValidation(True, targets=(-45.25, 69.25)),
+            gripper=ChannelValidation(True, targets=(1.0,)),
+        )
+
         self.assertEqual(
-            metric_values(runtime_snapshot(SafetyState.RUNNING, command=command)),
-            ("45.2°", "110.8°", "61%"),
+            metric_values(
+                runtime_snapshot(
+                    SafetyState.RUNNING,
+                    command=command,
+                    report=report,
+                )
+            ),
+            ("+45.2° → -45.2°", "110.8° → +69.2°", "61%"),
+        )
+
+    def test_metrics_keep_human_angle_visible_when_robot_rejects_it(self) -> None:
+        command = MimicCommand(1, 1.0, arm=ArmCommand(150.0, 30.0))
+        report = ValidationReport(
+            arm=ChannelValidation(False, "fuera de limite"),
+            gripper=ChannelValidation(False, "sin mano"),
+        )
+
+        self.assertEqual(
+            metric_values(
+                runtime_snapshot(
+                    SafetyState.RUNNING,
+                    command=command,
+                    report=report,
+                )
+            )[:2],
+            ("+150.0° → --", "30.0° → --"),
         )
 
 

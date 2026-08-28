@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ArmCommand:
-    """Objetivo humano coordinado para hombro y codo, en grados."""
+    """Pose humana: elevación firmada de hombro y ángulo interno de codo."""
 
     shoulder_deg: float
     elbow_deg: float

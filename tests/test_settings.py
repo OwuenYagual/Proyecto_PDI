@@ -35,6 +35,38 @@ class SettingsValidationTests(unittest.TestCase):
         )
         self.assertEqual(settings.COPPELIASIM_VIEW_HZ, 10.0)
         self.assertEqual(
+            settings.COPPELIASIM_VIEW_CAMERA_POSITION,
+            (-2.75, -1.55, 1.05),
+        )
+        self.assertEqual(
+            settings.COPPELIASIM_VIEW_TARGET_POSITION,
+            (-0.3, 0.0, 0.52),
+        )
+        self.assertEqual(settings.COPPELIASIM_VIEW_ANGLE_DEG, 50.0)
+        self.assertEqual(settings.COPPELIASIM_BASE_YAW_DEG, 90.0)
+        self.assertEqual(settings.COPPELIASIM_SHOULDER_DIRECTION, -1.0)
+        self.assertEqual(settings.COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG, 90.0)
+        self.assertEqual(
+            settings.COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG,
+            15.0,
+        )
+        self.assertEqual(
+            (
+                settings.COPPELIASIM_SHOULDER_MIN_DEG,
+                settings.COPPELIASIM_SHOULDER_MAX_DEG,
+            ),
+            (-90.0, 90.0),
+        )
+        self.assertEqual(settings.COPPELIASIM_ELBOW_DIRECTION, 1.0)
+        self.assertEqual(settings.COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG, 180.0)
+        self.assertEqual(
+            (
+                settings.COPPELIASIM_ELBOW_MIN_DEG,
+                settings.COPPELIASIM_ELBOW_MAX_DEG,
+            ),
+            (0.0, 135.0),
+        )
+        self.assertEqual(
             (settings.COPPELIASIM_VIEW_WIDTH, settings.COPPELIASIM_VIEW_HEIGHT),
             (640, 480),
         )
@@ -196,6 +228,56 @@ class SettingsValidationTests(unittest.TestCase):
             for value in (0, 1.5, True):
                 with self.subTest(name=name, value=value):
                     self.assert_invalid(name, value)
+
+    def test_rejects_invalid_simulator_view_framing(self) -> None:
+        invalid_vectors = (
+            ("COPPELIASIM_VIEW_CAMERA_POSITION", [0.0, -1.55, 0.45]),
+            ("COPPELIASIM_VIEW_CAMERA_POSITION", (0.0, math.nan, 0.45)),
+            ("COPPELIASIM_VIEW_TARGET_POSITION", (0.0, 0.0)),
+            ("COPPELIASIM_VIEW_TARGET_POSITION", (0.0, True, 0.45)),
+        )
+        for name, value in invalid_vectors:
+            with self.subTest(name=name, value=value):
+                self.assert_invalid(name, value)
+
+        for value in (0.0, 180.0, math.inf, True):
+            with self.subTest(angle=value):
+                self.assert_invalid("COPPELIASIM_VIEW_ANGLE_DEG", value)
+
+    def test_rejects_vertical_simulator_view_direction(self) -> None:
+        with patch.object(
+            settings,
+            "COPPELIASIM_VIEW_CAMERA_POSITION",
+            (0.0, 0.0, 1.0),
+        ), patch.object(
+            settings,
+            "COPPELIASIM_VIEW_TARGET_POSITION",
+            (0.0, 0.0, 0.0),
+        ):
+            with self.assertRaisesRegex(ValueError, "vista frontal"):
+                settings.validate_settings()
+
+    def test_rejects_non_finite_base_yaw(self) -> None:
+        for value in (math.nan, math.inf, True, "90"):
+            with self.subTest(value=value):
+                self.assert_invalid("COPPELIASIM_BASE_YAW_DEG", value)
+
+    def test_rejects_invalid_arm_calibration(self) -> None:
+        invalid_values = (
+            ("COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG", 181.0),
+            ("COPPELIASIM_SHOULDER_ROBOT_NEUTRAL_DEG", math.nan),
+            ("COPPELIASIM_SHOULDER_DIRECTION", 0.0),
+            ("COPPELIASIM_SHOULDER_DIRECTION", True),
+            ("COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG", -1.0),
+            ("COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG", 90.0),
+            ("COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG", math.inf),
+            ("COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG", -1.0),
+            ("COPPELIASIM_ELBOW_ROBOT_STRAIGHT_DEG", math.inf),
+            ("COPPELIASIM_ELBOW_DIRECTION", 0.5),
+        )
+        for name, value in invalid_values:
+            with self.subTest(name=name, value=value):
+                self.assert_invalid(name, value)
 
     def test_rejects_unordered_or_non_finite_joint_limits(self) -> None:
         invalid_values = (

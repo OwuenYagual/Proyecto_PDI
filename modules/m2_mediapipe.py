@@ -85,6 +85,7 @@ class PoseDetector:
                 pose_results.pose_landmarks,
                 frame_width,
                 frame_height,
+                getattr(pose_results, "pose_world_landmarks", None),
             )
             hand_candidates = self._process_hands_if_needed(
                 rgb_frame,
@@ -250,15 +251,27 @@ class PoseDetector:
         pose_landmarks,
         frame_width: int,
         frame_height: int,
+        pose_world_landmarks=None,
     ) -> dict:
         extracted = {}
+        world_points = getattr(pose_world_landmarks, "landmark", None)
         for idx in (SHOULDER, ELBOW, WRIST_POSE):
             landmark = pose_landmarks.landmark[idx]
-            extracted[idx] = {
+            point = {
                 "x": landmark.x * frame_width,
                 "y": landmark.y * frame_height,
                 "visibility": landmark.visibility,
             }
+            if world_points is not None and len(world_points) > idx:
+                world = world_points[idx]
+                point.update(
+                    {
+                        "world_x": world.x,
+                        "world_y": world.y,
+                        "world_z": world.z,
+                    }
+                )
+            extracted[idx] = point
         return extracted
 
     @staticmethod

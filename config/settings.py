@@ -7,7 +7,7 @@ from numbers import Real
 
 
 # Camara
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 CAMERA_FPS = 30
@@ -47,13 +47,31 @@ COPPELIASIM_VIEW_SENSOR_PATH = "/RobotMimicVisionSensor"
 COPPELIASIM_VIEW_HZ = 10.0
 COPPELIASIM_VIEW_WIDTH = 640
 COPPELIASIM_VIEW_HEIGHT = 480
+# Vista oblicua frontal-dominante, expresada respecto al root /UR5.
+# Muestra el gripper casi de frente sin perder la componente lateral necesaria
+# para leer la flexion; conserva Z vertical y el robot completo en el encuadre.
+COPPELIASIM_VIEW_CAMERA_POSITION = (-2.75, -1.55, 1.05)
+COPPELIASIM_VIEW_TARGET_POSITION = (-0.3, 0.0, 0.52)
+COPPELIASIM_VIEW_ANGLE_DEG = 50.0
+# Orientacion global del modelo UR5 alrededor del eje vertical (Z).
+# El valor se aplica al root /UR5 y no modifica los ejes locales de los joints.
+COPPELIASIM_BASE_YAW_DEG = 90.0
 COPPELIASIM_JOINT_COUNT = 6
 COPPELIASIM_SHOULDER_INDEX = 1
 COPPELIASIM_ELBOW_INDEX = 2
-COPPELIASIM_SHOULDER_MIN_DEG = -60.0
-COPPELIASIM_SHOULDER_MAX_DEG = 0.0
-COPPELIASIM_ELBOW_MIN_DEG = -60.0
-COPPELIASIM_ELBOW_MAX_DEG = 0.0
+# Calibracion humano -> UR5. El hombro humano es una elevacion firmada desde
+# la vertical hacia abajo. El codo humano es el angulo interno (180 = recto).
+COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG = 90.0
+COPPELIASIM_SHOULDER_ROBOT_NEUTRAL_DEG = 0.0
+COPPELIASIM_SHOULDER_DIRECTION = -1.0
+COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG = 15.0
+COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG = 180.0
+COPPELIASIM_ELBOW_ROBOT_STRAIGHT_DEG = 0.0
+COPPELIASIM_ELBOW_DIRECTION = 1.0
+COPPELIASIM_SHOULDER_MIN_DEG = -90.0
+COPPELIASIM_SHOULDER_MAX_DEG = 90.0
+COPPELIASIM_ELBOW_MIN_DEG = 0.0
+COPPELIASIM_ELBOW_MAX_DEG = 135.0
 COPPELIASIM_GRIPPER_THRESHOLD = 0.5
 COPPELIASIM_MAX_VELOCITY_DEG = 45.0
 COPPELIASIM_MAX_ACCELERATION_DEG = 90.0
@@ -108,6 +126,25 @@ def _require_unit_interval(name: str) -> float:
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{name} debe estar en el intervalo [0, 1]; recibido {value!r}.")
     return value
+
+
+def _require_vector3(name: str) -> tuple[float, float, float]:
+    value = globals()[name]
+    if (
+        not isinstance(value, tuple)
+        or len(value) != 3
+        or any(
+            isinstance(component, bool)
+            or not isinstance(component, Real)
+            or not math.isfinite(float(component))
+            for component in value
+        )
+    ):
+        raise ValueError(
+            f"{name} debe ser una tupla de tres numeros reales finitos; "
+            f"recibido {value!r}."
+        )
+    return tuple(float(component) for component in value)
 
 
 def _require_ordered_pair(minimum_name: str, maximum_name: str) -> None:
@@ -243,6 +280,25 @@ def validate_settings() -> None:
         )
     _require_integer("COPPELIASIM_VIEW_WIDTH", minimum=1)
     _require_integer("COPPELIASIM_VIEW_HEIGHT", minimum=1)
+    camera_position = _require_vector3("COPPELIASIM_VIEW_CAMERA_POSITION")
+    target_position = _require_vector3("COPPELIASIM_VIEW_TARGET_POSITION")
+    horizontal_distance = math.hypot(
+        target_position[0] - camera_position[0],
+        target_position[1] - camera_position[1],
+    )
+    if horizontal_distance <= 1e-9:
+        raise ValueError(
+            "COPPELIASIM_VIEW_CAMERA_POSITION y "
+            "COPPELIASIM_VIEW_TARGET_POSITION deben definir una vista frontal "
+            "no vertical."
+        )
+    view_angle = _require_positive_number("COPPELIASIM_VIEW_ANGLE_DEG")
+    if view_angle >= 180.0:
+        raise ValueError(
+            "COPPELIASIM_VIEW_ANGLE_DEG debe ser menor que 180 grados; "
+            f"recibido {view_angle!r}."
+        )
+    _require_finite_number("COPPELIASIM_BASE_YAW_DEG")
 
     joint_count = _require_integer("COPPELIASIM_JOINT_COUNT", minimum=1)
     if joint_count != 6:
@@ -267,6 +323,42 @@ def validate_settings() -> None:
             "COPPELIASIM_SHOULDER_INDEX y COPPELIASIM_ELBOW_INDEX "
             "deben ser distintos."
         )
+
+    shoulder_human_neutral = _require_finite_number(
+        "COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG"
+    )
+    if not -180.0 <= shoulder_human_neutral <= 180.0:
+        raise ValueError(
+            "COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG debe pertenecer a "
+            f"[-180, 180]; recibido {shoulder_human_neutral!r}."
+        )
+    _require_finite_number("COPPELIASIM_SHOULDER_ROBOT_NEUTRAL_DEG")
+    shoulder_deadband = _require_finite_number(
+        "COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG"
+    )
+    if not 0.0 <= shoulder_deadband < 90.0:
+        raise ValueError(
+            "COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG debe pertenecer a "
+            f"[0, 90); recibido {shoulder_deadband!r}."
+        )
+    elbow_human_straight = _require_finite_number(
+        "COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG"
+    )
+    if not 0.0 <= elbow_human_straight <= 180.0:
+        raise ValueError(
+            "COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG debe pertenecer a "
+            f"[0, 180]; recibido {elbow_human_straight!r}."
+        )
+    _require_finite_number("COPPELIASIM_ELBOW_ROBOT_STRAIGHT_DEG")
+    for direction_name in (
+        "COPPELIASIM_SHOULDER_DIRECTION",
+        "COPPELIASIM_ELBOW_DIRECTION",
+    ):
+        direction = _require_finite_number(direction_name)
+        if direction not in {-1.0, 1.0}:
+            raise ValueError(
+                f"{direction_name} debe ser -1.0 o 1.0; recibido {direction!r}."
+            )
 
     _require_ordered_pair(
         "COPPELIASIM_SHOULDER_MIN_DEG",

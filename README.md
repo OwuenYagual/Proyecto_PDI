@@ -74,6 +74,9 @@ handles, los intervalos físicos, el modo de control y el estado de la simulaci�
 La escena incluida también contiene `/RobotMimicVisionSensor`, configurado a
 640x480 para alimentar a 10 Hz el panel derecho del dashboard. La ausencia del
 sensor no deshabilita el control seguro: la interfaz muestra un placeholder.
+Al conectarse, el controlador recoloca ese sensor en una vista oblicua hacia la
+pinza RG2, alinea su eje vertical con el eje Z del robot y usa un ángulo de
+visión de 50° para mostrar el robot completo sin llenar el cuadro de piso.
 La escena versionada ya deja los seis joints en control dinámico de posición con
 perfil de movimiento activo (`dynPosMode = 1`). Si se sustituye la escena y ese
 perfil no está activo, el controlador permanece fuera de `READY` y no acepta
@@ -148,8 +151,9 @@ Los parámetros principales están en `config/settings.py`:
 | MediaPipe | confianza, complejidad de modelos e intervalo de Hands |
 | Ángulos | ventana de suavizado, visibilidad y rango del gripper |
 | CoppeliaSim | endpoint, frecuencias, timeouts y límites operativos del UR5 |
+| Orientación | giro global de la base del UR5 alrededor del eje vertical |
 | Seguridad | edad de comandos, watchdog, colisiones y retorno a `home` |
-| Visualización | suavizado de FPS, ruta, resolución y frecuencia del Vision Sensor |
+| Visualización | posición, objetivo, zoom, resolución y frecuencia del Vision Sensor |
 
 Defaults de seguridad:
 
@@ -166,10 +170,38 @@ Defaults de seguridad:
 Para ejecutar únicamente la captura y detección, cambia
 `COPPELIASIM_ENABLED = False`.
 
-Los ángulos humanos deben pertenecer al intervalo de 0° a 180°; un valor
-ausente, booleano, no finito o fuera de rango se rechaza, no se recorta. El rango
-operativo final de cada joint es la intersección entre los límites de
-`settings.py` y `sim.getJointInterval` de la escena.
+El hombro humano se expresa como elevación firmada respecto a la vertical hacia
+abajo y pertenece a `[-180°, 180°]`; el signo coincide con la vista espejada del
+dashboard. El codo conserva el ángulo interno `[0°, 180°]`, donde `180°` es un
+brazo recto. Cuando MediaPipe entrega landmarks mundiales, el codo se calcula en
+3D para reducir el error al acercar el brazo a la cámara. Un valor ausente,
+booleano, no finito o fuera de rango se rechaza, no se recorta.
+
+La transformación al UR5 usa neutros y direcciones calibrables. Con los valores
+iniciales, cuando el codo humano está a la misma altura que el hombro, la
+elevación es `+90°` y el joint de hombro del UR5 queda en `0°`, manteniendo recto
+el primer tramo desde la base. Una zona neutral de ±15° absorbe las pequeñas
+diferencias de postura y detección: cualquier elevación entre `75°` y `105°`
+mantiene ese joint exactamente en `0°`. A la vez, `codo humano 90°` produce
+`joint UR5 +90°`, flexionando el antebrazo virtual hacia el mismo lado que el
+humano en la vista espejada. El rango operativo final de cada joint sigue siendo la
+intersección entre los límites de `settings.py` y `sim.getJointInterval` de la
+escena. El dashboard muestra ambos valores como `humano → UR5` para que la
+conversión sea visible durante la imitación.
+
+`COPPELIASIM_BASE_YAW_DEG` orienta el root `/UR5` respecto al mundo durante el
+preflight. El controlador fuerza roll y pitch a cero para conservar la base y el
+eje Z verticales, y aplica este valor únicamente como yaw. El giro afecta a toda
+la jerarquía del robot y no cambia los ejes locales ni los límites de sus joints.
+
+`COPPELIASIM_VIEW_CAMERA_POSITION` y `COPPELIASIM_VIEW_TARGET_POSITION` se
+expresan respecto al root `/UR5`. Los valores iniciales colocan la cámara en una
+vista oblicua frontal-dominante, a unos 32° de una vista completamente frontal:
+el gripper se ve casi de frente, mientras la componente lateral permite leer la
+flexión del antebrazo. El robot completo queda centrado, con la base abajo y Z
+vertical en la imagen. Para acercar o abrir el encuadre, ajusta
+`COPPELIASIM_VIEW_ANGLE_DEG`: un valor menor produce más zoom y uno mayor muestra
+más escena.
 
 ## Pruebas
 

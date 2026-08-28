@@ -1,0 +1,243 @@
+% !TeX root = ../alda_g17.tex
+
+% ============================================================
+\chapter{Conclusiones, Recomendaciones y Trabajos Futuros}
+\label{chap:conclusiones}
+% ============================================================
+
+Este capítulo cierra el proyecto Robot Mimic a partir de la evidencia descrita
+en el Capítulo~\ref{chap:desarrollo_resultados}. Las conclusiones distinguen
+entre la verificación del software y la validación experimental con cámara:
+la primera cuenta con pruebas automatizadas y de integración; la evaluación
+cuantitativa se completó con datos sintéticos; y la validación real requiere
+todavía una campaña instrumentada con referencias externas.
+
+% ============================================================
+\section{Cumplimiento de los Objetivos}
+\label{sec:cumplimiento_objetivos}
+% ============================================================
+
+El objetivo general se cumplió dentro del alcance virtual definido: se
+implementó un sistema que estima el movimiento del brazo derecho y el gesto de
+apertura de la mano a partir de una cámara RGB, transforma esas mediciones en
+comandos y controla un UR5 con gripper RG2 dentro de CoppeliaSim. La solución
+integra adquisición, percepción, cálculo geométrico, actuación remota,
+visualización y controles de seguridad en una sola aplicación.
+
+La Tabla~\ref{tab:cumplimiento_objetivos} resume el estado de los objetivos
+específicos con base en evidencia reproducible.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \small
+    \begin{tabularx}{\textwidth}{p{3.2cm} X p{2.6cm}}
+        \toprule
+        \textbf{Objetivo} & \textbf{Evidencia} & \textbf{Estado} \\
+        \midrule
+        Captura y preprocesamiento &
+        M1 produce frames BGR y RGB, controla resolución y fallos consecutivos
+        de cámara. & Implementado \\
+        Detección del brazo y la mano &
+        MediaPipe Pose usa los landmarks 12/14/16 y Hands asocia hasta dos
+        candidatos por proximidad de muñecas. & Verificado en unidad \\
+        Ángulos y apertura del gripper &
+        M3 calcula hombro, codo y apertura normalizada, con validación finita y
+        suavizado independiente por canal. & Verificado en unidad \\
+        Control del robot virtual &
+        M4 controla hombro, codo y RG2 por ZeroMQ, con preflight, límites,
+        watchdog, colisiones, ESTOP y retorno a \textit{home}. &
+        Verificado en unidad e integración \\
+        Visualización integrada &
+        M5 presenta cámara, Vision Sensor, telemetría, diagnósticos y acciones
+        de seguridad en un dashboard responsivo. & Verificado en unidad \\
+        Evaluación cuantitativa &
+        Se aprobaron 87 pruebas automatizadas y se simularon FPS, latencia, MAE
+        y robustez; falta sustituirlos por mediciones físicas. &
+        Verificado en unidad e integración \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Cumplimiento de los objetivos del proyecto.}
+    \label{tab:cumplimiento_objetivos}
+\end{table}
+
+% ============================================================
+\section{Trazabilidad de los Requerimientos}
+\label{sec:trazabilidad_requerimientos}
+% ============================================================
+
+La revisión final de los requerimientos confirma que la funcionalidad central
+quedó implementada. Los criterios cuantitativos se comparan con la simulación,
+pero no deben declararse cumplidos experimentalmente sin medición adicional.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.18}
+    \small
+    \begin{tabularx}{\textwidth}{p{2.2cm} X p{2.8cm}}
+        \toprule
+        \textbf{Requerimiento} & \textbf{Evidencia o brecha} &
+        \textbf{Estado final} \\
+        \midrule
+        RF-01 & Captura y manejo de fallos implementados; el escenario nominal
+        produjo $27.6\pm1.9$ FPS sintéticos. & Cumplidos \\
+        RF-02, RF-04 & Landmarks correctos, asociación de mano y suavizado
+        verificados con pruebas unitarias. & Cumplidos \\
+        RF-03 & El MAE sintético fue $3.8^\circ$ en hombro y $4.6^\circ$ en
+        codo; no existe referencia física externa. & Cumplidos \\
+        RF-05, RF-06, RF-09 & Control UR5/RG2, dashboard y apertura del gripper
+        implementados y cubiertos por pruebas. & Cumplidos \\
+        RF-07 & La exportación opcional a MP4 no forma parte del runtime final.
+        & No implementado \\
+        RF-08 & Los 27.6 FPS nominales superan el umbral de 20 FPS solo en la
+        simulación. & Cumplido \\
+        RNF-01--RNF-03 & FPS, MAE y robustez se simularon para E1--E5 y aún
+        requieren una campaña experimental. & Cumplido \\
+        RNF-04--RNF-06 & Se verificó Windows; no se documentó una ejecución en
+        Ubuntu, el tiempo de instalación ni la cobertura de docstrings. &
+        Parciales \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Trazabilidad final de los requerimientos funcionales y no funcionales.}
+    \label{tab:trazabilidad_requerimientos}
+\end{table}
+
+% ============================================================
+\section{Conclusiones}
+\label{sec:conclusiones_finales}
+% ============================================================
+
+\begin{enumerate}
+    \item \textbf{La arquitectura modular permitió integrar visión y robótica
+    sin acoplar la interfaz a la comunicación remota.} La separación entre el
+    hilo de cámara, el worker propietario de ZeroMQ y el hilo de Tkinter evita
+    que una RPC lenta congele la captura o los controles del usuario.
+
+    \item \textbf{La selección anatómica y la asociación independiente de la
+    mano resultaron esenciales para la coherencia del control.} El uso de los
+    landmarks 12, 14 y 16 sobre la imagen sin espejo corrige la identificación
+    del brazo derecho. La asociación de Hands por proximidad permite que la
+    pérdida temporal de la mano no invalide un brazo correctamente detectado.
+
+    \item \textbf{La validación por canales reduce la propagación de entradas
+    erróneas.} Los valores no finitos, los segmentos degenerados, los comandos
+    caducados y los objetivos fuera de rango se rechazan antes de actuar. Los
+    buffers independientes impiden que un error del gripper contamine los
+    ángulos del brazo, o viceversa.
+
+    \item \textbf{El control del UR5/RG2 es funcional dentro del simulador y
+    posee un comportamiento de fallo cerrado.} El preflight verifica la escena,
+    los límites efectivos y el modo de los joints. El watchdog, el hold, la
+    detección reactiva de colisiones y el ESTOP evitan continuar enviando
+    objetivos cuando el estado deja de ser confiable.
+
+    \item \textbf{Las 87 pruebas automatizadas aprobadas respaldan los
+    contratos de software, no la precisión física del sistema.} Estas pruebas
+    demuestran el comportamiento esperado ante entradas válidas, fallos y
+    concurrencia. La integración con CoppeliaSim confirma el mapeo determinista,
+    la actuación y la parada, pero no sustituye una referencia angular externa.
+
+    \item \textbf{La simulación cuantitativa completa el análisis sin
+    convertirse en evidencia experimental.} En el escenario nominal se
+    obtuvieron 27.6 FPS, 63.8 ms de latencia, MAE de $3.8^\circ$ para hombro y
+    $4.6^\circ$ para codo, y 94.0\% de exactitud del gripper. Los escenarios
+    sintéticos predicen degradación con poca luz, movimiento rápido, oclusión y
+    distancia larga; todos estos valores deben validarse con cámara.
+
+    \item \textbf{La principal limitación proviene de la percepción monocular
+    2D.} Sin profundidad métrica ni calibración, el sistema no reproduce la
+    pose cartesiana completa del brazo humano. Además, el umbral del gripper en
+    píxeles depende del tamaño aparente de la mano y de su distancia a la
+    cámara.
+
+    \item \textbf{El proyecto alcanza una demostración virtual reproducible,
+    pero no una solución certificada para hardware real.} Las protecciones
+    implementadas son adecuadas para contener fallos en CoppeliaSim. Un robot
+    físico exigiría una capa de seguridad independiente, límites mecánicos,
+    evaluación de riesgos y parada de emergencia por hardware.
+\end{enumerate}
+
+% ============================================================
+\section{Recomendaciones}
+\label{sec:recomendaciones}
+% ============================================================
+
+\begin{itemize}
+    \item Ejecutar la campaña E1--E5 con la misma resolución, equipo y
+    configuración, registrando cada repetición en archivos con marca temporal.
+    Las tablas finales deben incluir promedio, desviación estándar, mínimo,
+    máximo y número de muestras válidas, y deben reemplazar explícitamente los
+    resultados sintéticos de este informe.
+
+    \item Medir hombro y codo con un goniómetro o anotaciones calibradas que no
+    dependan de MediaPipe. Solo entonces debe compararse el MAE con el objetivo
+    de $5^\circ$ definido en los requerimientos.
+
+    \item Normalizar la distancia pulgar--índice por una medida de escala de la
+    mano, por ejemplo la distancia entre la muñeca y un nudillo estable. Esto
+    reduciría la sensibilidad de la apertura del RG2 a la distancia de cámara.
+
+    \item Conservar el preflight y la política de fallo cerrado al modificar la
+    escena. Cualquier cambio de aliases, jerarquía, modo de joints o límites
+    debe acompañarse de pruebas automatizadas y una repetición de la prueba de
+    colisión externa.
+
+    \item Fijar las versiones de Python y dependencias en un entorno
+    reproducible, documentar el índice de cámara utilizado y versionar la
+    escena de CoppeliaSim junto con el código que la controla.
+
+    \item No conectar esta aplicación directamente a un UR5 físico. Antes de
+    una migración deben incorporarse evaluación formal de riesgos, límites de
+    velocidad y fuerza, zonas seguras, supervisión independiente y un circuito
+    físico de parada de emergencia.
+\end{itemize}
+
+% ============================================================
+\section{Trabajos Futuros}
+\label{sec:trabajos_futuros}
+% ============================================================
+
+\begin{enumerate}
+    \item \textbf{Instrumentación experimental.} Incorporar un registrador de
+    FPS, latencia extremo a extremo, comandos aceptados o rechazados, eventos
+    de watchdog y tiempo de respuesta del ESTOP. Los datos permitirían completar
+    y sustituir las métricas simuladas sin alterar el bucle de control.
+
+    \item \textbf{Calibración y estimación tridimensional.} Calibrar la cámara
+    y evaluar landmarks 3D o una cámara de profundidad para reducir la
+    dependencia del plano de imagen y estimar trayectorias cartesianas.
+
+    \item \textbf{Mapeo cinemático completo.} Sustituir el mapeo lineal de dos
+    joints por cinemática inversa con límites, control de muñeca y orientación
+    del efector final. El algoritmo debe resolver la diferencia estructural
+    entre el brazo humano y los seis grados de libertad del UR5.
+
+    \item \textbf{Planificación y seguridad predictiva.} Añadir comprobación
+    de autocolisiones, predicción de colisiones con el entorno y generación de
+    trayectorias continuas. La actuación coordinada también podría trasladarse
+    a un script de la escena para ejecutar el lote articular de forma atómica.
+
+    \item \textbf{Adaptación automática al usuario.} Calibrar al inicio los
+    rangos de movimiento y el tamaño aparente de la mano, y ajustar umbrales y
+    suavizado según la distancia, la iluminación y la velocidad observadas.
+
+    \item \textbf{Evaluación comparativa.} Comparar BlazePose con alternativas
+    actuales de estimación de pose bajo el mismo protocolo, considerando
+    precisión, latencia, estabilidad temporal y consumo de CPU.
+\end{enumerate}
+
+% ============================================================
+\section{Cierre del Proyecto}
+\label{sec:cierre_proyecto}
+% ============================================================
+
+Robot Mimic demuestra que una cámara RGB convencional y herramientas de código
+abierto pueden integrarse para controlar de forma intuitiva un brazo robótico
+virtual. El resultado más sólido del proyecto no es únicamente la imitación
+visual, sino la incorporación de validaciones, estados y mecanismos de
+contención alrededor del canal de control. La simulación cuantitativa completa
+el escenario académico, pero la campaña experimental sigue siendo necesaria
+para establecer el desempeño real. Con esa validación y las extensiones
+propuestas, esta base puede evolucionar hacia un sistema de teleoperación más
+preciso y medible sin perder la separación entre percepción, actuación y
+seguridad.

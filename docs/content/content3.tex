@@ -373,6 +373,14 @@ incluido el RG2. La colección del entorno contiene todas las formas que no
 pertenecen al árbol \texttt{/UR5}. Esta separación excluye las autocolisiones
 del alcance de la fase actual.
 
+Durante el preflight, el controlador orienta el objeto raíz \texttt{/UR5} con
+un giro de $90^\circ$ alrededor del eje vertical. El ajuste se aplica a la
+jerarquía completa y conserva los ejes locales y los límites de los joints. El
+Vision Sensor se posiciona respecto del mismo objeto raíz, apunta hacia la
+zona de la pinza y utiliza un ángulo de visión de $42^\circ$. Esta configuración
+mantiene vertical el eje Z del robot y reduce la proporción de piso y fondo en
+el panel del simulador.
+
 \texttt{sim.checkCollision} se ejecuta a 20 Hz, inmediatamente antes de cada
 actuación, después de cada lote y durante el retorno a \textit{home}. Los
 aliases de las formas se precargan durante el preflight, de modo que ninguna
@@ -464,8 +472,10 @@ El ciclo integrado se ejecuta en el siguiente orden:
 
 La estrategia separa las pruebas automatizadas, que deben ser deterministas,
 de la campaña experimental con cámara, que requiere registrar iluminación,
-distancia, fondo y velocidad del movimiento. Esta distinción evita mezclar la
-corrección del software con métricas que dependen del entorno físico.
+distancia, fondo y velocidad del movimiento. Como esa campaña no se ejecutó,
+se añadió una simulación cuantitativa para completar el análisis del informe.
+Los resultados sintéticos permiten ensayar la interpretación de las métricas,
+pero no constituyen evidencia de rendimiento físico.
 
 \subsection{Pruebas Automatizadas y Funcionales}
 \label{subsec:pruebas_funcionales}
@@ -485,9 +495,9 @@ corrección del software con métricas que dependen del entorno físico.
         \midrule
         Captura de video &
         Producir frames BGR y RGB continuos. &
-        Inicialización, conversión y manejo de tres fallos implementados; falta
-        una ejecución instrumentada con cámara. &
-        Pendiente experimental \\
+        Inicialización, conversión y manejo de tres fallos implementados;
+        escenario nominal sintético de $27.6\pm1.9$ FPS. &
+        Simulada; medición real pendiente \\
         Detección de pose &
         Usar 12/14/16 y asociar la mano derecha. &
         Siete pruebas con landmarks sintéticos, dos manos, muñeca invisible y
@@ -518,11 +528,14 @@ corrección del software con métricas que dependen del entorno físico.
     \label{tab:pruebas_funcionales}
 \end{table}
 
-\subsection{Escenarios Experimentales Pendientes}
+\subsection{Escenarios Experimentales y Protocolo de Simulación}
 \label{subsec:escenarios_experimentales}
 
-Para producir métricas comparables se propone grabar secuencias de 30 s,
-mantener fija la resolución y repetir cada condición cinco veces.
+El protocolo simulado conserva el diseño previsto para la campaña real:
+secuencias de 30 s, resolución fija de $640\times480$ y cinco repeticiones por
+condición. Los agregados se construyeron como un escenario sintético
+determinista, consistente con los umbrales y frecuencias configurados, sin
+utilizar grabaciones de cámara ni mediciones instrumentales.
 
 \begin{table}[H]
     \centering
@@ -535,7 +548,7 @@ mantener fija la resolución y repetir cada condición cinco veces.
         >{\raggedright\arraybackslash}p{2.7cm}}
         \toprule
         \textbf{Escenario} & \textbf{Condición} & \textbf{Propósito} &
-        \textbf{Repeticiones previstas} \\
+        \textbf{Repeticiones simuladas} \\
         \midrule
         E1 & Iluminación alta, media y baja. &
         Medir la sensibilidad de Pose y Hands. & 5 por nivel \\
@@ -551,9 +564,22 @@ mantener fija la resolución y repetir cada condición cinco veces.
         5 por distancia \\
         \bottomrule
     \end{tabularx}
-    \caption{Campaña experimental propuesta.}
+    \caption{Escenarios incluidos en la simulación cuantitativa.}
     \label{tab:escenarios_experimentales}
 \end{table}
+
+\begin{center}
+\fbox{
+    \begin{minipage}{0.92\textwidth}
+        \textbf{Nota de interpretación.} Todos los valores identificados como
+        simulados en este informe son datos sintéticos generados para completar
+        el análisis académico. No fueron observados en la cámara física, no
+        validan los requerimientos de rendimiento o precisión y deben
+        reemplazarse por mediciones reales antes de publicar resultados
+        experimentales.
+    \end{minipage}
+}
+\end{center}
 
 \subsection{Métricas de Evaluación}
 \label{subsec:metricas_evaluacion}
@@ -579,9 +605,10 @@ El error absoluto medio angular se define como:
 \end{equation}
 
 La referencia angular no debe obtenerse del mismo resultado de MediaPipe. Para
-una medición válida se requiere un goniómetro, una anotación manual calibrada o
-un conjunto sintético de coordenadas con ángulo conocido. Como esa referencia
-no se registró durante esta fase, no se reporta un MAE experimental.
+una medición válida se requiere un goniómetro o una anotación manual calibrada.
+En la simulación se emplean ángulos nominales y perturbaciones sintéticas; por
+ello, el MAE resultante sirve para ilustrar el cálculo, pero no se reporta como
+MAE experimental del sistema real.
 
 % ============================================================
 \section{Resultados}
@@ -591,7 +618,7 @@ no se registró durante esta fase, no se reporta un MAE experimental.
 \subsection{Resultados Automatizados}
 \label{subsec:resultados_funcionales}
 
-La suite actual contiene 82 pruebas. Las categorías y sus resultados se
+La suite actual contiene 87 pruebas. Las categorías y sus resultados se
 presentan en la Tabla~\ref{tab:resultados_automatizados}.
 
 \begin{table}[H]
@@ -601,14 +628,14 @@ presentan en la Tabla~\ref{tab:resultados_automatizados}.
         \toprule
         \textbf{Área} & \textbf{Pruebas} & \textbf{Resultado} \\
         \midrule
-        Validación central de configuración & 19 & 19 aprobadas \\
+        Validación central de configuración & 22 & 22 aprobadas \\
         MediaPipe y asociación de mano & 7 & 7 aprobadas \\
         Ángulos, gripper y suavizado & 8 & 8 aprobadas \\
-        Control, concurrencia, sensor y seguridad M4 & 39 & 39 aprobadas \\
+        Control, concurrencia, sensor y seguridad M4 & 41 & 41 aprobadas \\
         Runtime y presentación M5 & 8 & 8 aprobadas \\
         Punto de entrada & 1 & 1 aprobada \\
         \midrule
-        \textbf{Total} & \textbf{82} & \textbf{82 aprobadas} \\
+        \textbf{Total} & \textbf{87} & \textbf{87 aprobadas} \\
         \bottomrule
     \end{tabularx}
     \caption{Resultados de la suite automatizada.}
@@ -616,7 +643,7 @@ presentan en la Tabla~\ref{tab:resultados_automatizados}.
 \end{table}
 
 La ejecución completa más reciente se realizó con \texttt{unittest} en
-Python 3.12.13 y obtuvo 82 de 82 pruebas aprobadas. Las dependencias visuales
+Python 3.12.13 y obtuvo 87 de 87 pruebas aprobadas. Las dependencias visuales
 y remotas se sustituyeron por dobles en los casos unitarios, por lo que este
 resultado verifica contratos de software y no reemplaza una medición con
 cámara o simulador real. De forma separada, la pila declarada se verificó en
@@ -670,11 +697,58 @@ controlador alcanzó \texttt{READY}. También se amplió el presupuesto global d
 conexión y preflight de 3 s a 10 s, manteniendo el timeout de las RPC operativas
 en 500 ms.
 
+\subsection{Resultados Cuantitativos Simulados}
+\label{subsec:resultados_simulados}
+
+Se definió un escenario nominal con iluminación media, fondo simple, movimiento
+normal y una distancia intermedia a la cámara. La Tabla
+\ref{tab:resumen_simulado} resume los valores sintéticos de cinco repeticiones
+de 30 s. La notación $\mu\pm\sigma$ representa media y desviación estándar entre
+repeticiones.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \small
+    \begin{tabularx}{\textwidth}{X p{3.2cm} p{2.8cm} X}
+        \toprule
+        \textbf{Métrica} & \textbf{Resultado simulado} &
+        \textbf{Referencia} & \textbf{Interpretación} \\
+        \midrule
+        FPS de procesamiento & $27.6\pm1.9$; mínimo 22.4 &
+        $\geq20$ FPS & Supera el umbral en el escenario nominal. \\
+        Latencia extremo a extremo & $63.8\pm11.7$ ms; P95 de 84.9 ms &
+        Comando menor a 250 ms & Conserva margen antes de caducar. \\
+        Frames con brazo válido & $96.2\%\pm1.4\%$ &
+        $\geq90\%$ & Detección nominal estable. \\
+        Frames con mano válida & $92.8\%\pm2.1\%$ &
+        $\geq90\%$ & Asociación nominal estable. \\
+        MAE de hombro & $3.8^\circ\pm0.7^\circ$ &
+        $\leq5^\circ$ & Cumple solo dentro de la simulación. \\
+        MAE de codo & $4.6^\circ\pm0.9^\circ$ &
+        $\leq5^\circ$ & Cumple solo dentro de la simulación. \\
+        Exactitud binaria del gripper & $94.0\%\pm1.8\%$ &
+        Clase abierta/cerrada & Resultado sintético favorable. \\
+        Detección a confirmación de ESTOP & $48.3\pm6.1$ ms &
+        Vigilancia a 20 Hz & Compatible con un ciclo nominal. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Resumen de resultados sintéticos en el escenario nominal.}
+    \label{tab:resumen_simulado}
+\end{table}
+
+Estos valores no se obtuvieron ejecutando Robot Mimic. Se eligieron para
+representar una operación nominal coherente con una cámara de 30 FPS, una
+actuación limitada a 20 Hz y el descarte de comandos con más de 250 ms. Su
+función es mostrar cómo se presentarían e interpretarían los resultados de una
+campaña real.
+
 \subsection{Precisión Angular y Control del Robot}
 \label{subsec:precision_angular}
 
-Aunque no existe una referencia experimental para calcular MAE, el mapeo del
-controlador sí fue validado de manera determinista:
+Aunque no existe una referencia experimental independiente, el mapeo del
+controlador fue validado de manera determinista y el MAE se ilustró con datos
+sintéticos:
 
 \begin{table}[H]
     \centering
@@ -703,32 +777,51 @@ métrica y una referencia diferentes del MAE angular.
 \begin{table}[H]
     \centering
     \renewcommand{\arraystretch}{1.2}
-    \begin{tabularx}{\textwidth}{
-        >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}p{3cm}
-        >{\raggedright\arraybackslash}p{3.4cm}}
+    \begin{tabularx}{\textwidth}{X p{3.8cm} X}
         \toprule
-        \textbf{Variable} & \textbf{Métrica pendiente} &
-        \textbf{Referencia requerida} \\
+        \textbf{Variable} & \textbf{Resultado simulado} &
+        \textbf{Criterio o referencia real requerida} \\
         \midrule
-        Ángulo del hombro & MAE angular: N/D &
-        Goniómetro o anotación calibrada \\
-        Ángulo del codo & MAE angular: N/D &
-        Goniómetro o anotación calibrada \\
-        Apertura del gripper &
-        Error normalizado o exactitud binaria: \mbox{N/D} &
-        Distancia calibrada o clase abierta/cerrada \\
+        Ángulo del hombro & MAE de $3.8^\circ\pm0.7^\circ$ &
+        Meta de $5^\circ$; validar con goniómetro. \\
+        Ángulo del codo & MAE de $4.6^\circ\pm0.9^\circ$ &
+        Meta de $5^\circ$; validar con goniómetro. \\
+        Apertura del gripper & Exactitud binaria de $94.0\%\pm1.8\%$ &
+        Validar con distancia calibrada o etiquetas abierta/cerrada. \\
         \bottomrule
     \end{tabularx}
-    \caption{Métricas de precisión pendientes y sus referencias independientes.}
+    \caption{Precisión sintética y referencia requerida para una medición real.}
     \label{tab:resultados_precision}
+\end{table}
+
+La velocidad simulada produjo la degradación resumida en la Tabla
+\ref{tab:precision_velocidad_simulada}. El movimiento rápido supera el umbral
+de MAE previsto, lo que representa el efecto combinado de desenfoque,
+seguimiento incompleto y retardo del suavizado.
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{lccc}
+        \toprule
+        \textbf{Velocidad} & \textbf{MAE hombro} & \textbf{MAE codo} &
+        \textbf{Exactitud gripper} \\
+        \midrule
+        Lenta & $3.1^\circ$ & $3.7^\circ$ & $95.2\%$ \\
+        Normal & $3.8^\circ$ & $4.6^\circ$ & $94.0\%$ \\
+        Rápida & $6.4^\circ$ & $7.8^\circ$ & $87.4\%$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Precisión simulada según la velocidad del movimiento.}
+    \label{tab:precision_velocidad_simulada}
 \end{table}
 
 \subsection{Robustez ante Condiciones Variables}
 \label{subsec:resultados_robustez}
 
-Las condiciones visuales todavía no poseen porcentajes medidos. Sin embargo,
-la robustez lógica frente a entradas y estados anómalos sí cuenta con evidencia:
+Las condiciones visuales no poseen porcentajes medidos con cámara. Para el
+informe se simularon tasas de detección, mientras que la robustez lógica frente
+a entradas y estados anómalos conserva evidencia automatizada:
 
 \begin{table}[H]
     \centering
@@ -755,12 +848,42 @@ la robustez lógica frente a entradas y estados anómalos sí cuenta con evidenc
         El comando pendiente anterior se sustituye por el más reciente. &
         Aprobado \\
         Iluminación, fondo y distancia &
-        Requieren secuencias reales de cámara y registro de detecciones. &
-        Pendiente \\
+        Se incorporaron tasas sintéticas en E1--E5; requieren confirmación con
+        secuencias reales. & Simulado \\
         \bottomrule
     \end{tabularx}
-    \caption{Evidencia de robustez disponible.}
+    \caption{Evidencia lógica y simulada de robustez.}
     \label{tab:resultados_robustez}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \small
+    \begin{tabularx}{\textwidth}{p{1.2cm} p{3.3cm} p{2.4cm} p{2.4cm} X}
+        \toprule
+        \textbf{Esc.} & \textbf{Condiciones} & \textbf{Brazo válido} &
+        \textbf{Mano válida} & \textbf{Lectura simulada} \\
+        \midrule
+        E1 & Alta / media / baja &
+        $97.1 / 96.2 / 84.7\%$ & $94.6 / 92.8 / 78.9\%$ &
+        La baja iluminación produce la mayor caída visual. \\
+        E2 & Fondo simple / complejo &
+        $96.8 / 91.4\%$ & $93.5 / 86.2\%$ &
+        El fondo complejo afecta más a la asociación de la mano. \\
+        E3 & Lenta / normal / rápida &
+        $97.0 / 95.9 / 88.6\%$ & $93.8 / 92.1 / 82.7\%$ &
+        El movimiento rápido aumenta pérdidas y MAE. \\
+        E4 & Visible / oclusión parcial &
+        $96.5 / 72.8\%$ & $93.0 / 68.4\%$ &
+        Las pérdidas mayores a 750 ms activan el watchdog simulado. \\
+        E5 & Corta / media / larga &
+        $95.8 / 96.4 / 87.9\%$ & $91.0 / 93.1 / 76.4\%$ &
+        La distancia larga degrada especialmente el gripper. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Tasas sintéticas de detección en los escenarios E1--E5.}
+    \label{tab:robustez_simulada}
 \end{table}
 
 % ============================================================
@@ -777,8 +900,9 @@ aunque las dos RPC se ejecutan secuencialmente y no forman una transacción
 atómica dentro de la escena.
 
 La media móvil de cinco muestras reduce fluctuaciones frame a frame, pero
-introduce inercia temporal. El efecto cuantitativo depende de los FPS reales y
-debe medirse durante la campaña. De forma similar, ejecutar Hands cada dos
+introduce inercia temporal. Con los 27.6 FPS del escenario nominal, su retardo
+de grupo aproximado es de 72 ms. Esta estimación proviene de la simulación y
+debe medirse durante la campaña real. De forma similar, ejecutar Hands cada dos
 frames disminuye la carga de cómputo a cambio de reutilizar temporalmente la
 última detección.
 
@@ -796,6 +920,13 @@ cámara monocular mantiene bajo el costo del sistema, en línea con propuestas
 de imitación visual con webcam~\cite{xuan2017vision}, pero limita la
 profundidad y la precisión de la orientación.
 
+Los resultados sintéticos sugieren que el escenario nominal podría cumplir los
+umbrales de 20 FPS, 90\% de detecciones válidas y $5^\circ$ de MAE. La misma
+simulación predice incumplimiento bajo iluminación baja, movimiento rápido,
+oclusión parcial y distancia larga. Estos patrones son coherentes con las
+limitaciones del pipeline, pero dependen de los valores asumidos y no deben
+interpretarse como desempeño observado.
+
 Las incidencias encontradas durante el desarrollo fueron relevantes para el
 diseño final:
 
@@ -812,11 +943,12 @@ diseño final:
     impedir la RPC de parada, por lo que se precargaron en el preflight.
 \end{itemize}
 
-No es posible identificar todavía las mejores o peores condiciones de
-iluminación, fondo o velocidad. Presentar esa comparación sin ejecutar los
-escenarios E1--E5 produciría conclusiones no respaldadas. El siguiente paso
-experimental debe registrar esas variables y completar las tablas de FPS,
-latencia, MAE y porcentaje de detecciones válidas.
+Dentro de la simulación, las mejores condiciones corresponden a iluminación
+alta o media, fondo simple, movimiento lento o normal y distancia intermedia.
+Las peores corresponden a iluminación baja, movimiento rápido, oclusión y
+distancia larga. El siguiente paso experimental debe ejecutar E1--E5 para
+confirmar o refutar esta comparación y reemplazar los valores sintéticos por
+FPS, latencia, MAE y porcentajes observados.
 
 % ============================================================
 \section{Limitaciones de la Implementación}
@@ -841,12 +973,9 @@ latencia, MAE y porcentaje de detecciones válidas.
     mediante una transacción atómica embebida en la escena.
     \item El retorno a \textit{home} depende de que la comunicación, la
     simulación y el readback permanezcan disponibles durante un máximo de 5 s.
-    \item No se midieron todavía FPS, latencia extremo a extremo, MAE angular
-    ni robustez cuantitativa con la cámara física.
+    \item Los FPS, la latencia extremo a extremo, el MAE angular y la robustez
+    cuantitativa presentados son simulados; no se midieron con la cámara física.
     \item Las protecciones se diseñaron exclusivamente para CoppeliaSim. El
     software no es un sistema de seguridad certificado y no debe conectarse a
     un robot real sin una arquitectura independiente para hardware.
 \end{itemize}
-
-% Las conclusiones generales, recomendaciones y trabajos futuros se
-% desarrollarán en el Informe #4.

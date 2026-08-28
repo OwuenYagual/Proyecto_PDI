@@ -1,15 +1,22 @@
 % !TeX root = ../alda_g17.tex
 
+\pagestyle{short}
 \tableofcontents
+\clearpage
+\pagestyle{long}
 
-\chapter{Introduction}
+\chapter{Introducción}
 
 \section{Descripción del problema}
 La captura de movimiento markerless (sin marcadores físicos) representa una línea activa de investigación en visión artificial con aplicaciones en robótica, rehabilitación médica, interfaces humano-máquina e interacción natural. \cite{Pauzietal2021}
 
-Los enfoques tradicionales basados en sensores físicos, trajes de captura óptica o cámaras de profundidad resultan costosos e intrusivos. El presente proyecto propone un sistema basado exclusivamente en una cámara convencional que, procesando el video en tiempo real, detecte la pose del brazo humano, calcule los ángulos articulares de hombro, codo y muñeca, y transfiera esos valores a la simulación visual de un brazo robótico virtual de tres grados de libertad (GDL).  \cite{Vintimilla2026}
+Los enfoques tradicionales basados en sensores físicos, trajes de captura óptica o cámaras de profundidad resultan costosos e intrusivos. El presente proyecto propone un sistema basado en una cámara convencional que procesa video en tiempo real, detecta el hombro, codo y muñeca derechos, estima la apertura de la mano y transfiere esos valores al control de un UR5 con gripper RG2 dentro de CoppeliaSim. \cite{Vintimilla2026}
 
-La solución adopta MediaPipe Pose de Google, un framework de código abierto que proporciona detección de 33 landmarks corporales en tiempo real sin necesidad de GPU, combinado con OpenCV para la adquisición y el procesamiento de imagen. \cite{Bazarevskyetal2020} \cite{Lugaresietal2019}
+La solución combina OpenCV para la adquisición y el procesamiento de imagen,
+MediaPipe Pose y Hands para la percepción, y la ZeroMQ Remote API para controlar
+el simulador. Un dashboard integra la cámara humana, la vista del robot, las
+mediciones y el estado de seguridad. \cite{Bazarevskyetal2020}
+\cite{Lugaresietal2019}
 
 \subsection*{Diagrama de Bloques General del Sistema}
 La figura \ref{fig:diagrama_bloques} representa el flujo de datos global del proyecto, descompuesto en sus cinco módulos funcionales principales.
@@ -32,16 +39,26 @@ La justificación económica radica en el bajo costo de implementación: el sist
 \section{Objetivos}
 
 \subsection{Objetivo principal}
-Desarrollar un sistema de visión artificial que, a partir de video capturado en tiempo real por una cámara convencional, detecte los movimientos del brazo humano utilizando MediaPipe Pose \cite{Bazarevskyetal2020} \cite{Lugaresietal2019}, calcule los ángulos de las articulaciones hombro, codo y muñeca, y los transfiera a la simulación visual sincronizada de un brazo robótico virtual de 3 GDL.
+Desarrollar un sistema de visión artificial que, a partir de video capturado en
+tiempo real por una cámara convencional, detecte los movimientos del brazo
+derecho y la apertura de la mano con MediaPipe, y los transfiera al control
+sincronizado y supervisado de un UR5 con gripper RG2 dentro de CoppeliaSim.
 
 \subsection{Objetivos específicos}
 \begin{enumerate}
-    \item Implementar un módulo de captura y preprocesamiento de video en tiempo real usando OpenCV \cite{Bradski2000} con soporte para normalización de resolución (640×480) y conversión de espacio de color BGR→RGB.
-    \item Integrar el modelo MediaPipe Pose \cite{Bazarevskyetal2020} para la detección y extracción de los 33 landmarks corporales, con énfasis en los puntos clave del brazo (hombros: landmarks 11,12; codos: 13,14; muñecas: 15,16).
-    \item Desarrollar un módulo de cálculo de ángulos articulares mediante álgebra vectorial (producto escalar y norma de vectores) para los tres GDL del brazo: hombro (elevación), codo (flexión) y muñeca (flexión), con filtrado de media móvil de 5 frames.
-    \item Implementar la simulación 2D del brazo robótico virtual mediante cinemática directa, renderizando en tiempo real el modelo sobre el frame de video usando primitivas OpenCV (cv2.line, cv2.circle) \cite{Bradski2000}.
-    \item Construir un módulo de visualización integrada que muestre el skeleton de MediaPipe \cite{Lugaresietal2019}, los ángulos articulares calculados, el brazo robótico simulado y métricas de rendimiento (FPS).
-    \item Evaluar el desempeño del sistema con métricas de latencia (FPS objetivo: $\geq$ 20 FPS), precisión angular y estabilidad del sistema ante variaciones de iluminación, usando como referencia el benchmark del dataset COCO Keypoints \cite{10.1007/978-3-319-10602-1_48}.
+    \item Implementar la captura y el preprocesamiento de video en tiempo real
+    con OpenCV, normalización a $640\times480$ y conversión BGR$\rightarrow$RGB.
+    \item Integrar MediaPipe Pose y Hands para detectar el hombro, codo y muñeca
+    derechos, y asociar la mano correspondiente al brazo observado.
+    \item Calcular los ángulos de hombro y codo y la apertura normalizada del
+    gripper, con validación geométrica y media móvil de cinco muestras.
+    \item Controlar el UR5 y el RG2 en CoppeliaSim mediante ZeroMQ, respetando
+    límites articulares e incorporando estados, watchdog, colisiones y ESTOP.
+    \item Construir una visualización integrada con cámara humana, Vision
+    Sensor, ángulos, apertura, FPS, diagnósticos y acciones de seguridad.
+    \item Verificar los contratos del software y la integración con el
+    simulador, y definir un protocolo para medir FPS, latencia, MAE y robustez
+    bajo condiciones variables.
 \end{enumerate}
 
 \section{Módulos del proyecto}
@@ -252,10 +269,9 @@ Salida &
 \subsection{Módulo 4 -- Simulación del Brazo Robótico Virtual}
 
 \subsubsection*{Objetivo}
-Representar y animar en pantalla un brazo robótico de 3~GDL cuyas
-posiciones articulares se corresponden directamente con los ángulos
-calculados por M3, logrando una imitación visual sincronizada en
-tiempo real~\cite{Altayeb2023}.
+Controlar un UR5 con gripper RG2 dentro de CoppeliaSim a partir de los
+ángulos y la apertura calculados por M3, manteniendo límites operativos y
+un estado de seguridad verificable~\cite{Altayeb2023}.
 
 \subsubsection*{Entradas y Salidas}
 
@@ -273,14 +289,12 @@ tiempo real~\cite{Altayeb2023}.
 \textbf{Formato / Especificación} \\
 \midrule
 Entrada &
-  Ángulos articulares suavizados (salida de M3) &
-  $\theta_{\text{hombro}},\,\theta_{\text{codo}},\,
-   \theta_{\text{muñeca}}$ en grados (float64) \\
+  Comando humano tipado (salida de M3) &
+  Ángulos de hombro y codo en grados, apertura normalizada y marca temporal \\
 \midrule
 Salida &
-  Frame con overlay del brazo robótico virtual &
-  NumPy array BGR con eslabones y articulaciones renderizados
-  en tiempo real \\
+  Estado y telemetría del UR5/RG2 &
+  Objetivos articulares, señal del gripper, readback y snapshot de seguridad \\
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 4.}
@@ -289,53 +303,31 @@ Salida &
  
 \paragraph{Herramientas Tecnológicas}
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Librería principal:}
-        OpenCV (cv2)~\cite{Bradski2000} para renderizado
-        de primitivas gráficas: cv2.line (eslabones),
-        cv2.circle (articulaciones),
-        cv2.putText (ángulos).
-  \item \textbf{Librería de soporte:} NumPy para el cálculo
-        de coordenadas cartesianas de cada articulación mediante
-        cinemática directa 2D.
+  \item \textbf{Simulador:} CoppeliaSim 4.10 con una escena UR5/RG2 y
+        Vision Sensor.
+  \item \textbf{Comunicación:} ZeroMQ Remote API para consultar la escena,
+        enviar objetivos y leer el estado del robot.
+  \item \textbf{Concurrencia:} worker exclusivo para las RPC y una cola lógica
+        \textit{latest-only} para descartar comandos obsoletos.
 \end{itemize}
 
-\paragraph{Técnicas de Visión Computacional y Robótica}
+\paragraph{Técnicas de Robótica y Seguridad}
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Cinemática directa 2D:} a partir de los ángulos
-        articulares y las longitudes de eslabón predefinidas
-        ($L_{\text{hombro}}$, $L_{\text{antebrazo}}$,
-        $L_{\text{mano}}$), se calculan las posiciones cartesianas
-        $(x,\,y)$ de cada junta del brazo virtual mediante relaciones
-        trigonométricas acumulativas:
- 
-        \begin{align}
-          x_1 &= x_0 + L_{\text{hombro}}\cos(\theta_{\text{hombro}})
-          \notag \\
-          y_1 &= y_0 - L_{\text{hombro}}\sin(\theta_{\text{hombro}})
-          \notag \\
-          x_2 &= x_1 + L_{\text{antebrazo}}
-                        \cos(\theta_{\text{hombro}}
-                             + \theta_{\text{codo}})
-          \notag \\
-          y_2 &= y_1 - L_{\text{antebrazo}}
-                        \sin(\theta_{\text{hombro}}
-                             + \theta_{\text{codo}})
-          \label{eq:cinematica}
-        \end{align}
- 
-  \item \textbf{Renderizado de overlay:} el brazo robótico se
-        dibuja sobre el frame de video como una capa superpuesta,
-        permitiendo la comparación visual directa entre el movimiento
-        humano y la imitación del brazo virtual.
+  \item Mapeo lineal de los ángulos humanos a los límites efectivos de hombro
+        y codo obtenidos de la configuración y de la escena.
+  \item Preflight de jerarquía, joints, RG2, intervalos, modo dinámico,
+        colecciones de colisión y simulación activa.
+  \item Hold, watchdog de pose, ESTOP enclavado, detección reactiva de
+        colisiones y retorno verificado a \textit{home}.
+  \item Orientación del modelo y encuadre del Vision Sensor durante el
+        preflight para presentar el movimiento en un plano vertical estable.
 \end{itemize}
 
 \subsection{Módulo 5 -- Visualización y Métricas en Tiempo Real}
 
 \subsubsection*{Objetivo}
-Integrar y mostrar en una ventana unificada el frame original anotado
-con el skeleton de MediaPipe, los ángulos calculados, el
-brazo robótico virtual y las métricas de rendimiento del sistema
-(FPS).
+Integrar en un dashboard la cámara humana anotada, la vista del Vision Sensor,
+las mediciones, los diagnósticos y los controles de seguridad del sistema.
 
 \subsubsection*{Entradas y Salidas}
 
@@ -353,16 +345,12 @@ brazo robótico virtual y las métricas de rendimiento del sistema
 \textbf{Formato / Especificación} \\
 \midrule
 Entrada &
-  Frame original $+$ landmarks $+$ ángulos $+$
-  overlay del brazo robótico &
-  Salidas de M1, M2, M3 y M4 en cada iteración del
-  bucle principal \\
+  Frames y snapshots de M1--M4 &
+  Cámara humana, Vision Sensor, mediciones y estado de seguridad \\
 \midrule
 Salida &
-  Frame anotado final visualizado en tiempo real &
-  Ventana OpenCV (cv2.imshow) con overlay
-  completo; exportación opcional a MP4
-  (cv2.VideoWriter) \\
+  Dashboard interactivo en tiempo real &
+  Dos paneles visuales, telemetría, diagnósticos y acciones de teclado \\
 \bottomrule
 \end{tabularx}
 \caption{Entradas y salidas del Módulo 5.}
@@ -371,20 +359,15 @@ Salida &
  
 \paragraph{Herramientas Tecnológicas}
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Librería principal:}
-        OpenCV (cv2)~\cite{Bradski2000} — visualización
-        en ventana interactiva (cv2.imshow,
-        cv2.waitKey) y exportación de video
-        (cv2.VideoWriter).
+  \item \textbf{Interfaz:} Tkinter/ttk para componer el dashboard y procesar
+        las acciones del usuario sin bloquear el hilo de visión.
+  \item \textbf{OpenCV:} anotación y conversión de los frames de cámara antes
+        de mostrarlos en la interfaz~\cite{Bradski2000}.
   \item \textbf{MediaPipe Drawing Utils}~\cite{Lugaresietal2019}
         — dibujo automático del skeleton de 33~landmarks y
         conexiones corporales sobre el frame.
-  \item Matplotlib (v3.7+) — generación de gráficas de
-        evolución temporal de ángulos articulares y métricas de FPS
-        para análisis de resultados.
-  \item scikit-learn (v1.3+) — cálculo de métricas
-        estadísticas de evaluación: error medio angular (MAE),
-        correlación de Pearson y análisis de estabilidad del sistema.
+  \item \textbf{Pillow:} conversión de los frames BGR/RGB a imágenes aptas
+        para los dos paneles de Tkinter.
 \end{itemize}
  
 \paragraph{Técnicas de Visión Computacional}
@@ -393,10 +376,9 @@ Salida &
         de procesamiento por frame con timestamps de Python
         (time.time()) para monitoreo continuo del rendimiento
         del sistema.
-  \item \textbf{Visualización compuesta:} superposición de múltiples
-        capas (frame original, skeleton MediaPipe,
-        overlay robótico, texto de métricas) mediante
-        operaciones de blendingde OpenCV.
+  \item \textbf{Visualización compuesta:} publicación de snapshots inmutables
+        con cámara humana, Vision Sensor, telemetría y diagnósticos, consumidos
+        por la GUI mediante \texttt{after()}.
 \end{itemize}
 
 \section{Soluciones existentes}

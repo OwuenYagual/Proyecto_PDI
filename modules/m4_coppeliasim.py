@@ -131,6 +131,16 @@ class CoppeliaRobot:
         self._view_sensor_path = str(settings.COPPELIASIM_VIEW_SENSOR_PATH)
         self._view_width = int(settings.COPPELIASIM_VIEW_WIDTH)
         self._view_height = int(settings.COPPELIASIM_VIEW_HEIGHT)
+        self._view_camera_position = tuple(
+            float(value) for value in settings.COPPELIASIM_VIEW_CAMERA_POSITION
+        )
+        self._view_target_position = tuple(
+            float(value) for value in settings.COPPELIASIM_VIEW_TARGET_POSITION
+        )
+        self._view_angle_deg = float(settings.COPPELIASIM_VIEW_ANGLE_DEG)
+        self._base_yaw_deg = float(
+            getattr(settings, "COPPELIASIM_BASE_YAW_DEG", 0.0)
+        )
         self._command_max_age = (
             float(getattr(settings, "COPPELIASIM_COMMAND_MAX_AGE_MS", 250))
             / 1000.0
@@ -389,26 +399,29 @@ class CoppeliaRobot:
         shoulder_deg: float,
         elbow_deg: float,
     ) -> tuple[float, float]:
-        """Escala el rango humano completo al rango configurado del UR5."""
-        shoulder_deg = max(0.0, min(180.0, shoulder_deg))
-        elbow_deg = max(0.0, min(180.0, elbow_deg))
-
-        shoulder_ratio = shoulder_deg / 180.0
-        elbow_flexion_ratio = (180.0 - elbow_deg) / 180.0
+        """Aplica offsets y signos calibrados sin comprimir los ángulos."""
+        shoulder_delta = (
+            shoulder_deg
+            - float(settings.COPPELIASIM_SHOULDER_HUMAN_NEUTRAL_DEG)
+        )
+        shoulder_deadband = float(
+            settings.COPPELIASIM_SHOULDER_NEUTRAL_DEADBAND_DEG
+        )
+        shoulder_delta = math.copysign(
+            max(0.0, abs(shoulder_delta) - shoulder_deadband),
+            shoulder_delta,
+        )
         shoulder_target = (
-            settings.COPPELIASIM_SHOULDER_MAX_DEG
-            + shoulder_ratio
-            * (
-                settings.COPPELIASIM_SHOULDER_MIN_DEG
-                - settings.COPPELIASIM_SHOULDER_MAX_DEG
-            )
+            float(settings.COPPELIASIM_SHOULDER_ROBOT_NEUTRAL_DEG)
+            + float(settings.COPPELIASIM_SHOULDER_DIRECTION)
+            * shoulder_delta
         )
         elbow_target = (
-            settings.COPPELIASIM_ELBOW_MAX_DEG
-            + elbow_flexion_ratio
+            float(settings.COPPELIASIM_ELBOW_ROBOT_STRAIGHT_DEG)
+            + float(settings.COPPELIASIM_ELBOW_DIRECTION)
             * (
-                settings.COPPELIASIM_ELBOW_MIN_DEG
-                - settings.COPPELIASIM_ELBOW_MAX_DEG
+                float(settings.COPPELIASIM_ELBOW_HUMAN_STRAIGHT_DEG)
+                - elbow_deg
             )
         )
         return shoulder_target, elbow_target
@@ -574,6 +587,7 @@ class CoppeliaRobot:
         ur5_handle = sim.getObject("/UR5")
         if not self._valid_handle(ur5_handle):
             raise RuntimeError("no se encontró /UR5")
+        self._orient_ur5_base(ur5_handle)
 
         count = int(settings.COPPELIASIM_JOINT_COUNT)
         shoulder_index = int(settings.COPPELIASIM_SHOULDER_INDEX)
@@ -618,6 +632,31 @@ class CoppeliaRobot:
                 )
         self._create_collision_collections(ur5_handle)
         self._resolve_vision_sensor()
+        self._configure_vision_sensor(ur5_handle)
+
+    def _orient_ur5_base(self, ur5_handle: int) -> None:
+        """Orienta el modelo completo sin cambiar los ejes locales de joints."""
+        if not math.isfinite(self._base_yaw_deg):
+            raise RuntimeError("COPPELIASIM_BASE_YAW_DEG no es finito")
+
+        sim = self._require_sim()
+        get_orientation = getattr(sim, "getObjectOrientation", None)
+        set_orientation = getattr(sim, "setObjectOrientation", None)
+        if not callable(get_orientation) or not callable(set_orientation):
+            raise RuntimeError(
+                "la API no permite orientar el root /UR5 alrededor del eje vertical"
+            )
+
+        orientation = get_orientation(ur5_handle, -1)
+        if (
+            not isinstance(orientation, (tuple, list))
+            or len(orientation) != 3
+            or not all(self._is_number(value) for value in orientation)
+        ):
+            raise RuntimeError("orientación inválida para el root /UR5")
+
+        target_orientation = [0.0, 0.0, math.radians(self._base_yaw_deg)]
+        set_orientation(ur5_handle, -1, target_orientation)
 
     def _resolve_vision_sensor(self) -> None:
         """Localiza el sensor opcional sin convertirlo en requisito de seguridad."""
@@ -641,6 +680,62 @@ class CoppeliaRobot:
 
         self._vision_sensor_handle = int(handle)
         self._set_simulator_frame_message("Esperando imagen del simulador...")
+
+    def _configure_vision_sensor(self, ur5_handle: int) -> None:
+        """Encuadra lateralmente el robot completo y conserva Z vertical."""
+        handle = self._vision_sensor_handle
+        if handle is None:
+            return
+
+        camera = self._view_camera_position
+        target = self._view_target_position
+        forward = [target[index] - camera[index] for index in range(3)]
+        forward_norm = math.sqrt(sum(value * value for value in forward))
+        if forward_norm <= 1e-9:
+            raise RuntimeError("la camara y su objetivo no pueden coincidir")
+        forward = [value / forward_norm for value in forward]
+
+        # El Vision Sensor mira por +Z y usa +Y como arriba. Mantener +Y tan
+        # alineado como sea posible con el eje vertical del UR5 hace que el
+        # movimiento del hombro/codo se lea en un plano vertical estable.
+        world_up = [0.0, 0.0, 1.0]
+        left = [
+            world_up[1] * forward[2] - world_up[2] * forward[1],
+            world_up[2] * forward[0] - world_up[0] * forward[2],
+            world_up[0] * forward[1] - world_up[1] * forward[0],
+        ]
+        left_norm = math.sqrt(sum(value * value for value in left))
+        if left_norm <= 1e-9:
+            raise RuntimeError("la vista del simulador debe tener componente horizontal")
+        left = [value / left_norm for value in left]
+        up = [
+            forward[1] * left[2] - forward[2] * left[1],
+            forward[2] * left[0] - forward[0] * left[2],
+            forward[0] * left[1] - forward[1] * left[0],
+        ]
+
+        matrix = [
+            left[0], up[0], forward[0], camera[0],
+            left[1], up[1], forward[1], camera[1],
+            left[2], up[2], forward[2], camera[2],
+        ]
+        sim = self._require_sim()
+        set_matrix = getattr(sim, "setObjectMatrix", None)
+        if not callable(set_matrix):
+            raise RuntimeError("la API no permite encuadrar el Vision Sensor")
+        set_matrix(handle, ur5_handle, matrix)
+
+        view_angle = math.radians(self._view_angle_deg)
+        set_float_property = getattr(sim, "setFloatProperty", None)
+        if callable(set_float_property):
+            set_float_property(handle, "viewAngle", view_angle)
+            return
+
+        set_float_param = getattr(sim, "setObjectFloatParam", None)
+        parameter = getattr(sim, "visionfloatparam_perspective_angle", None)
+        if not callable(set_float_param) or parameter is None:
+            raise RuntimeError("la API no permite aplicar zoom al Vision Sensor")
+        set_float_param(handle, parameter, view_angle)
 
     def _validate_joint_kinds_and_modes(self) -> None:
         sim = self._require_sim()
@@ -1181,8 +1276,10 @@ class CoppeliaRobot:
         if not all(self._is_number(value) for value in values):
             return ChannelValidation(False, "ángulos del brazo no finitos")
         shoulder, elbow = (float(value) for value in values)
-        if not 0.0 <= shoulder <= 180.0 or not 0.0 <= elbow <= 180.0:
-            return ChannelValidation(False, "ángulos humanos fuera de [0, 180]")
+        if not -180.0 <= shoulder <= 180.0:
+            return ChannelValidation(False, "hombro humano fuera de [-180, 180]")
+        if not 0.0 <= elbow <= 180.0:
+            return ChannelValidation(False, "codo humano fuera de [0, 180]")
 
         targets = self.map_arm_angles(shoulder, elbow)
         for index, target_deg in zip(

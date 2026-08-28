@@ -84,7 +84,9 @@ M2. MediaPipe Pose &
   Frame RGB normalizado &
   Sujeto visible; cuerpo parcialmente ocluido hasta apróximadamente un 30\% &
   Reflejo horizontal opcional (modo selfie); ajuste de
-  min\_detection\_confidence $\geq$ 0.7; extracción de landmarks 11, 13, 15, 17, 19, 21 (hombro, codo, muñeca, nudillo índice, punta índice y punta pulgar derechos) \\
+  min\_detection\_confidence $\geq$ 0.7; extracción de los landmarks 12, 14 y
+  16 de Pose (hombro, codo y muñeca derechos) y 0, 4 y 8 de Hands (muñeca,
+  punta del pulgar y punta del índice) \\
 \midrule
 M3. Ángulos &
   Landmarks 2D (float32, $x,y \in [0,1]$) &
@@ -143,8 +145,9 @@ El alcance del proyecto queda delimitado por los siguientes criterios:
 el sistema procesa video de una sola persona visible en cámara
 (single-person pose estimation), en entornos con iluminación
 entre 50 y 500 lux, con el sujeto a una distancia de 1--3 metros de la
-cámara. El brazo robótico virtual es una simulación 2D renderizada en
-pantalla y no controla hardware físico. \cite{Vintimilla2026}
+cámara. El brazo robótico virtual corresponde a un UR5 con gripper RG2 dentro
+de CoppeliaSim; se controlan hombro, codo y apertura binaria del gripper. El
+sistema no controla hardware físico. \cite{Vintimilla2026}
 
 \subsection{Requerimientos}
 
@@ -173,14 +176,14 @@ RF-01 &
 \midrule
 RF-02 &
   El sistema debe detectar la pose del cuerpo humano usando MediaPipe
-  Pose con una confianza mínima de 0.7, extrayendo únicamente los
-  landmarks 11, 13, 15, 17, 19 y 21 correspondientes al hombro, codo,
-  muñeca, nudillo, punta del índice y punta del pulgar derechos &
+  Pose con una confianza mínima de 0.7, extrayendo los landmarks 12, 14 y 16
+  del brazo derecho, y debe asociar la mano correspondiente para utilizar la
+  muñeca, punta del pulgar y punta del índice (0, 4 y 8 de Hands) &
   Alta & M2, M3 \\
 \midrule
 RF-03 &
-  El sistema debe calcular los ángulos de hombro, codo y muñeca con un
-  error máximo de $\pm 5^\circ$ &
+  El sistema debe calcular los ángulos de hombro y codo con un
+  MAE máximo de $5^\circ$ respecto de una referencia independiente &
   Alta & M3 \\
 \midrule
 RF-04 &
@@ -189,13 +192,13 @@ RF-04 &
   Media & M3 \\
 \midrule
 RF-05 &
-  El sistema debe renderizar un brazo robótico virtual de 3 GDL
-  sincronizado con el movimiento en tiempo real &
+  El sistema debe controlar un UR5/RG2 en CoppeliaSim, respetando límites y
+  estados de seguridad &
   Alta & M4 \\
 \midrule
 RF-06 &
-  El sistema debe mostrar los ángulos articulares y las métricas de FPS
-  superpuestas en el frame de video &
+  El sistema debe mostrar cámara humana, vista del simulador, ángulos, apertura,
+  FPS y estado de seguridad en un dashboard &
   Media & M5 \\
 \midrule
 RF-07 &
@@ -328,11 +331,15 @@ Conexión a internet &
 \midrule
 Python        & 3.10+  & PSF         & Lenguaje principal de implementación \\
 \midrule
-OpenCV (cv2)  & 4.8+   & Apache 2.0  & Captura, preprocesamiento, renderizado y visualización (M1, M4, M5) \cite{Bradski2000} \\
+OpenCV (cv2)  & 4.8+   & Apache 2.0  & Captura, preprocesamiento y anotación visual (M1, M5) \cite{Bradski2000} \\
 \midrule
-MediaPipe     & 0.10+  & Apache 2.0  & Detección de pose BlazePose; extracción de landmarks 11, 13, 15, 17, 19, 21 para ángulos articulares y apertura del gripper (M2, M3) \cite{Bazarevskyetal2020, Lugaresietal2019} \\
+MediaPipe     & 0.10+  & Apache 2.0  & Pose y Hands; extracción del brazo derecho y apertura del gripper (M2, M3) \cite{Bazarevskyetal2020, Lugaresietal2019} \\
 \midrule
 NumPy         & 1.24+  & BSD         & Álgebra vectorial para cálculo angular y manejo de arrays (M3) \\
+\midrule
+CoppeliaSim   & 4.10   & Educativa   & Simulación del UR5/RG2, joints, colisiones y Vision Sensor (M4) \\
+\midrule
+ZeroMQ Remote API & 2.0+ & BSD & Comunicación entre Python y CoppeliaSim (M4) \\
 \midrule
 Matplotlib    & 3.7+   & PSF         & Gráficas de evolución de ángulos articulares y métricas FPS (M5) \\
 \midrule
@@ -391,9 +398,9 @@ lógica para cada articulación:
     \item Calcular la apertura del gripper: distancia euclidiana entre landmark 19 (punta índice) y landmark 21 (punta pulgar), normalizada entre un valor mínimo $d_{min}$ (pinza cerrada) y máximo $d_{max}$ (pinza abierta), expresada como porcentaje [0\%, 100\%].
 \end{enumerate}
 
-\subsubsection*{Diseño del Módulo M4 -- Cinemática Directa 2D}
+\subsubsection*{Diseño Preliminar del Módulo M4 -- Cinemática Directa 2D}
 
-El brazo robótico virtual se modela como una cadena cinemática de tres
+El diseño preliminar consideró un brazo robótico virtual como una cadena cinemática de tres
 eslabones más un efector final tipo gripper, anclada en una posición
 fija de la pantalla (base). Las longitudes de eslabón son parámetros
 configurables (en píxeles):
@@ -426,6 +433,11 @@ directa acumulativa (ecuaciones \ref{eq:cinematica_s2}):
                \sin(\theta_{\text{hombro}} + \theta_{\text{codo}})
   \label{eq:cinematica_s2}
 \end{align}
+
+Durante la implementación, este diseño fue sustituido por la escena UR5/RG2 de
+CoppeliaSim descrita en la Sección~\ref{subsec:implementacion_m4}. Se conserva
+esta subsección para documentar la evolución entre el concepto del Sprint 2 y
+la solución final.
 
 \subsection{Bocetos y Flujos de Pantalla}
 
@@ -509,16 +521,16 @@ Sprint \#3 -- Fase 1 & 5--7 &
   Código M1--M3 funcional + pruebas unitarias \\
 \midrule
 Sprint \#3 -- Fase 2 & 8--10 &
-  M4: cinemática directa 2D, renderizado del brazo y simulación visual del gripper (apertura/cierre). M5:
-  visualización integrada y FPS overlay. Integración de M1--M5 en
-  pipeline completo. &
-  Sistema integrado funcional a $\geq$ 20 FPS \\
+  M4: integración del UR5/RG2 en CoppeliaSim, comunicación ZeroMQ, límites,
+  watchdog, colisiones y ESTOP. M5: dashboard con cámara humana, Vision Sensor,
+  telemetría y controles. Integración de M1--M5. &
+  Sistema virtual integrado y verificable \\
 \midrule
 Sprint \#3 -- Fase 3 & 11--12 &
   Evaluación del sistema: FPS, MAE angular, robustez ante iluminación.
   Análisis estadístico con scikit-learn y gráficas con matplotlib.
   Redacción de conclusiones, recomendaciones y futuros trabajos. &
-  Informes \#3 y \#4 (Secciones 3 y 4) \\
+  Informe final (Secciones 3 y 4) \\
 \bottomrule
 \end{tabularx}
 \caption{Plan de implementación del proyecto por sprint y semanas.}

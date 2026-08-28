@@ -119,8 +119,18 @@ def metric_values(snapshot: RuntimeSnapshot) -> tuple[str, str, str]:
     elbow = "--"
     gripper = "--"
     if command is not None and command.arm is not None:
-        shoulder = f"{command.arm.shoulder_deg:.1f}°"
-        elbow = f"{command.arm.elbow_deg:.1f}°"
+        shoulder = f"{command.arm.shoulder_deg:+.1f}° → --"
+        elbow = f"{command.arm.elbow_deg:.1f}° → --"
+        report = snapshot.report
+        if report is not None and report.arm.accepted and len(report.arm.targets) == 2:
+            shoulder = (
+                f"{command.arm.shoulder_deg:+.1f}° → "
+                f"{report.arm.targets[0]:+.1f}°"
+            )
+            elbow = (
+                f"{command.arm.elbow_deg:.1f}° → "
+                f"{report.arm.targets[1]:+.1f}°"
+            )
     if command is not None and command.gripper is not None:
         gripper = f"{command.gripper.aperture * 100:.0f}%"
     return shoulder, elbow, gripper
@@ -471,8 +481,8 @@ class RobotMimicApp:
         for column in range(5):
             metrics.columnconfigure(column, weight=1, uniform="metric")
         self.fps_value = self._make_metric(metrics, 0, "FPS CÁMARA")
-        self.shoulder_value = self._make_metric(metrics, 1, "HOMBRO")
-        self.elbow_value = self._make_metric(metrics, 2, "CODO")
+        self.shoulder_value = self._make_metric(metrics, 1, "HOMBRO HUMANO → UR5")
+        self.elbow_value = self._make_metric(metrics, 2, "CODO HUMANO → UR5")
         self.gripper_value = self._make_metric(metrics, 3, "GRIPPER")
         self.connection_value = self._make_metric(metrics, 4, "CONEXIÓN")
 
@@ -504,7 +514,7 @@ class RobotMimicApp:
         card = tk.Frame(parent, bg=SURFACE_ALT, highlightbackground=BORDER, highlightthickness=1, padx=10, pady=4)
         card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 5, 0 if column == 4 else 5))
         tk.Label(card, text=title, bg=SURFACE_ALT, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w")
-        value = tk.Label(card, text="--", bg=SURFACE_ALT, fg=TEXT, font=("Segoe UI Semibold", 14))
+        value = tk.Label(card, text="--", bg=SURFACE_ALT, fg=TEXT, font=("Segoe UI Semibold", 12))
         value.pack(anchor="w")
         return value
 

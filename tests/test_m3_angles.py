@@ -2,7 +2,20 @@
 
 from dataclasses import FrozenInstanceError
 import math
+import sys
+from types import ModuleType
 import unittest
+
+
+try:
+    import cv2 as _cv2  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["cv2"] = ModuleType("cv2")
+
+try:
+    import mediapipe as _mediapipe  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["mediapipe"] = ModuleType("mediapipe")
 
 from modules.commands import ArmCommand, GripperCommand, MimicCommand
 from modules.m2_mediapipe import ELBOW, INDEX_TIP, SHOULDER, THUMB_TIP, WRIST_POSE
@@ -48,7 +61,7 @@ class AngleCalculatorTests(unittest.TestCase):
         self.assertIsInstance(command, MimicCommand)
         self.assertEqual(command.sequence, 1)
         self.assertEqual(command.created_at, 123.5)
-        self.assertEqual(command.arm, ArmCommand(shoulder_deg=180.0, elbow_deg=90.0))
+        self.assertEqual(command.arm, ArmCommand(shoulder_deg=0.0, elbow_deg=90.0))
         self.assertEqual(command.gripper, GripperCommand(aperture=0.5))
         self.assertIsNone(command.arm_error)
         self.assertIsNone(command.gripper_error)
@@ -83,7 +96,7 @@ class AngleCalculatorTests(unittest.TestCase):
         self.assertIsNotNone(rejected.gripper)
         # El historial de brazo se reinició: no se promedia 90° con los 180°
         # anteriores. El historial independiente del gripper sí se conserva.
-        self.assertEqual(recovered.arm.shoulder_deg, 90.0)
+        self.assertEqual(recovered.arm.shoulder_deg, -90.0)
         self.assertAlmostEqual(recovered.gripper.aperture, 0.667, places=3)
 
     def test_invalid_gripper_clears_only_gripper_history(self) -> None:
@@ -103,8 +116,8 @@ class AngleCalculatorTests(unittest.TestCase):
         self.assertIsNotNone(rejected.arm)
         self.assertIsNone(rejected.gripper)
         self.assertEqual(rejected.gripper_error, "gripper_landmark_non_finite")
-        # El brazo conserva sus dos muestras de 180° antes de promediar 90°.
-        self.assertEqual(recovered.arm.shoulder_deg, 150.0)
+        # El brazo conserva sus dos muestras de 0° antes de promediar -90°.
+        self.assertAlmostEqual(recovered.arm.shoulder_deg, -26.57, places=2)
         self.assertEqual(recovered.gripper.aperture, 1.0)
 
     def test_coincident_arm_landmarks_are_rejected_without_buffering(self) -> None:
@@ -121,7 +134,37 @@ class AngleCalculatorTests(unittest.TestCase):
 
         self.assertIsNone(rejected.arm)
         self.assertEqual(rejected.arm_error, "arm_segment_too_short")
-        self.assertEqual(recovered.arm.shoulder_deg, 90.0)
+        self.assertEqual(recovered.arm.shoulder_deg, -90.0)
+
+    def test_shoulder_is_signed_in_the_mirrored_display_reference(self) -> None:
+        calculator = AngleCalculator(clock=lambda: 1.0)
+        right_on_display = _arm(elbow=(-20.0, 30.0), wrist=(-20.0, 50.0))
+        left_on_display = _arm(elbow=(20.0, 30.0), wrist=(20.0, 50.0))
+
+        right = calculator.compute({"arm": right_on_display, "hand": _hand()})
+        calculator.reset_buffers()
+        left = calculator.compute({"arm": left_on_display, "hand": _hand()})
+
+        self.assertEqual(right.arm.shoulder_deg, 45.0)
+        self.assertEqual(left.arm.shoulder_deg, -45.0)
+
+    def test_elbow_prefers_world_landmarks_for_depth(self) -> None:
+        arm = _arm()
+        world = {
+            SHOULDER: (-1.0, 0.0, 0.0),
+            ELBOW: (0.0, 0.0, 0.0),
+            WRIST_POSE: (0.5, math.sqrt(3.0) / 2.0, 0.0),
+        }
+        for index, coordinates in world.items():
+            arm[index].update(
+                zip(("world_x", "world_y", "world_z"), coordinates)
+            )
+
+        command = AngleCalculator(clock=lambda: 1.0).compute(
+            {"arm": arm, "hand": _hand()}
+        )
+
+        self.assertEqual(command.arm.elbow_deg, 120.0)
 
     def test_non_finite_arm_coordinate_is_rejected(self) -> None:
         arm = _arm()
